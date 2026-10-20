@@ -1,0 +1,7 @@
+{
+ "admin/services/vlmcsd": {
+  "title": "Volume License Service", "order": 80,
+  "action": { "type": "view", "path": "vlmcsd/overview" },
+  "depends": { "acl": ["luci-app-vlmcsd"], "uci": {"vlmcsd": true} }
+ }
+}

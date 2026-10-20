@@ -1,0 +1,123 @@
+#!/bin/sh
+# Fixed entrypoints only; no user-provided shell fragments.
+set -e
+. /lib/functions.sh
+. /lib/functions/network.sh
+fail() { logger -t vlmcsd "ERROR: $*"; echo "$*" >&2; exit 1; }
+integer() { case "$2" in ''|*[!0-9]*) fail "Invalid $1";; esac; [ "$2" -ge "$3" ] && [ "$2" -le "$4" ] || fail "Invalid $1 range"; }
+lan_zone() {
+ local name networks
+ config_get name "$1" name
+ config_get networks "$1" network
+ [ "$name" != lan ] || case " $networks " in *" $iface "*) allowed=1;; esac
+ return 0
+}
+load_settings() {
+ config_load vlmcsd
+ config_get enabled main enabled 0
+ config_get iface main interface lan
+ config_get port main port 1688
+ config_get workers main max_workers 4
+ config_get seconds main timeout 30
+ config_get verbose main verbose 0
+ config_get dns main dns 0
+ for bit in "$enabled" "$verbose" "$dns"; do case "$bit" in 0|1) :;; *) fail 'Invalid boolean';; esac; done
+ case "$iface" in ''|*[!A-Za-z0-9_-]*) fail 'Invalid LAN interface';; esac
+ integer port "$port" 1024 65535
+ integer max_workers "$workers" 1 64
+ integer timeout "$seconds" 1 300
+ allowed=0
+ config_load firewall
+ config_foreach lan_zone zone
+ [ "$allowed" = 1 ] || fail 'Interface must belong to the LAN firewall zone'
+ network_flush_cache
+ network_get_ipaddr address "$iface" || fail 'LAN has no IPv4 address'
+ case "$address" in 10.*|192.168.*|172.1[6-9].*|172.2[0-9].*|172.3[01].*) :;; *) fail 'LAN IPv4 address must be private';; esac
+}
+render() {
+ load_settings
+ mkdir -p /var/etc
+ tmp=$(mktemp /var/etc/vlmcsd.ini.XXXXXX)
+ cat > "$tmp" <<INI
+Listen = 127.0.0.1:$port
+Listen = $address:$port
+FreeBind = false
+ExitLevel = 1
+MaxWorkers = $workers
+ConnectionTimeout = $seconds
+LogFile = syslog
+LogDateAndTime = false
+LogVerbose = $verbose
+PublicIPProtectionLevel = 2
+INI
+ chmod 644 "$tmp"
+ mv "$tmp" /var/etc/vlmcsd.ini
+}
+dns_record() {
+ local srv
+ config_get srv "$1" srv
+ [ "$srv" != "$service_name" ] || [ "$1" = vlmcsd_srv ] || fail 'Conflicting KMS SRV record'
+ return 0
+}
+validate_dns() {
+ local old owner
+ old=$(uci -q show dhcp.vlmcsd_srv || true)
+ owner=$(uci -q get dhcp.vlmcsd_srv.vlmcsd_owned || true)
+ [ -z "$old" ] || [ "$owner" = 1 ] || fail 'Conflicting DHCP section vlmcsd_srv'
+ if [ "$dns" = 1 ] && [ "$enabled" = 1 ]; then
+  domain=$(uci -q get 'dhcp.@dnsmasq[0].domain' || true)
+  host=$(uci -q get 'system.@system[0].hostname' || true)
+  case "$domain" in ''|*[!A-Za-z0-9.-]*) fail 'Invalid local DNS domain';; esac
+  case "$host" in ''|*[!A-Za-z0-9-]*) fail 'Invalid router hostname';; esac
+  service_name="_vlmcs._tcp.$domain"
+  config_load dhcp
+  config_foreach dns_record srvhost
+ fi
+}
+sync_dns() {
+ load_settings
+ validate_dns
+ [ "${1:-}" != off ] || dns=0
+ [ "$enabled" = 1 ] || dns=0
+ old=$(uci -q show dhcp.vlmcsd_srv || true)
+ owner=$(uci -q get dhcp.vlmcsd_srv.vlmcsd_owned || true)
+ [ -z "$old" ] || [ "$owner" = 1 ] || fail 'Conflicting DHCP section vlmcsd_srv'
+ if [ "$dns" = 1 ]; then
+  domain=$(uci -q get 'dhcp.@dnsmasq[0].domain' || true)
+  host=$(uci -q get 'system.@system[0].hostname' || true)
+  case "$domain" in ''|*[!A-Za-z0-9.-]*) fail 'Invalid local DNS domain';; esac
+  case "$host" in ''|*[!A-Za-z0-9-]*) fail 'Invalid router hostname';; esac
+  # A separately managed address record is unnecessary: dnsmasq expands the router hostname.
+  uci set dhcp.vlmcsd_srv=srvhost
+  uci set dhcp.vlmcsd_srv.vlmcsd_owned=1
+  uci set "dhcp.vlmcsd_srv.srv=_vlmcs._tcp.$domain"
+  uci set "dhcp.vlmcsd_srv.target=$host.$domain"
+  uci set "dhcp.vlmcsd_srv.port=$port"
+  uci set dhcp.vlmcsd_srv.class=0
+  uci set dhcp.vlmcsd_srv.weight=100
+ elif [ "$owner" = 1 ]; then
+  uci delete dhcp.vlmcsd_srv
+ fi
+ new=$(uci -q show dhcp.vlmcsd_srv || true)
+ if [ "$old" != "$new" ]; then
+  uci commit dhcp
+  /etc/init.d/dnsmasq reload
+ fi
+}
+case "${1:-}" in
+ validate) load_settings; validate_dns;;
+ render) render;;
+ dns) sync_dns "${2:-}";;
+ selftest)
+  load_settings
+  case "${2:-}" in 4|5|6) :;; *) fail 'Invalid protocol';; esac
+  [ -x /usr/bin/vlmcs ] || fail 'Install diagnostic client vlmcs'
+  out=$(mktemp /tmp/vlmcsd-selftest.XXXXXX)
+  trap 'rm -f "$out"' EXIT HUP INT TERM
+  rc=0
+  /usr/libexec/vlmcsd-timeout -k 1 10 /usr/bin/vlmcs -v "-$2" -n 1 "127.0.0.1:$port" > "$out" 2>&1 || rc=$?
+  cat "$out"
+  [ "$rc" = 0 ] && grep -q 'Response from KMS server' "$out" && ! grep -Eq 'ERROR:|Fatal:' "$out";;
+ logs) exec logread -e 'vlmcsd' -l 200;;
+ *) fail 'Unknown command';;
+esac

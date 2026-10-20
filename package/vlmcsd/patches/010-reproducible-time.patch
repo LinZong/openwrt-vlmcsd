@@ -1,0 +1,22 @@
+--- a/src/GNUmakefile
++++ b/src/GNUmakefile
+@@ -160,7 +160,9 @@
+   DLL_NAME ?= ../lib/libkms.so
+ endif
+ 
+-BASECFLAGS = -DVLMCSD_COMPILER=\"$(notdir $(CC))\" -DVLMCSD_PLATFORM=\"$(TARGETPLATFORM)\" -DCONFIG=\"$(CONFIG)\" -DBUILD_TIME=$(shell date '+%s') -g -Os -fno-strict-aliasing -fomit-frame-pointer -ffunction-sections -fdata-sections
++BUILD_DATE := $(shell date -u -d '@$(SOURCE_DATE_EPOCH)' '+%Y-%m-%d %H:%M:%S' | sed -e 's/ /\\ /g')
++
++BASECFLAGS = -DVLMCSD_COMPILER=\"$(notdir $(CC))\" -DVLMCSD_PLATFORM=\"$(TARGETPLATFORM)\" -DCONFIG=\"$(CONFIG)\" -DBUILD_TIME=$(SOURCE_DATE_EPOCH) -g -Os -fno-strict-aliasing -fomit-frame-pointer -ffunction-sections -fdata-sections
+ BASELDFLAGS = 
+ STRIPFLAGS =
+ CLIENTLDFLAGS =
+@@ -370,7 +372,7 @@
+ libkms-static: $(REAL_A_NAME)
+ 
+ ifneq ($(strip $(VLMCSD_VERSION)),)
+-  BASECFLAGS += -DVERSION=\"$(VLMCSD_VERSION),\ built\ $(shell date -u '+%Y-%m-%d %H:%M:%S' | sed -e 's/ /\\ /g')\ UTC\" 
++  BASECFLAGS += -DVERSION=\"$(VLMCSD_VERSION),\ built\ $(BUILD_DATE)\ UTC\" 
+ endif
+ 
+ ifdef CAT

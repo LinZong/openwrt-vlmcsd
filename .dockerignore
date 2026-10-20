@@ -1,0 +1,4 @@
+.cache
+.secrets
+dist
+.git

@@ -1,0 +1,86 @@
+'use strict';
+import { readfile, popen, lsdir, readlink } from 'fs';
+import { connect } from 'ubus';
+import { cursor } from 'uci';
+
+function command(cmd) {
+ let start = clock(true);
+ let fd = popen(cmd + ' 2>&1');
+ if (!fd) return { ok: false, output: 'Cannot execute command' };
+ let output = fd.read(32768) || '';
+ let rc = fd.close();
+ let end = clock(true);
+ return { ok: rc == 0, exit_code: rc, output, duration_ms: int((end[0] - start[0]) * 1000 + (end[1] - start[1]) / 1000000) };
+}
+function listeners(pid) {
+ if (!pid) return [];
+ let inodes = {};
+ for (let fd in lsdir(`/proc/${pid}/fd`) || []) {
+  let target = readlink(`/proc/${pid}/fd/${fd}`) || '';
+  let match_socket = match(target, /^socket:\[(\d+)\]$/);
+  if (match_socket) inodes[match_socket[1]] = true;
+ }
+ let result = [];
+ for (let family in ['tcp', 'tcp6']) {
+  for (let line in split(readfile(`/proc/net/${family}`) || '', '\n')) {
+   let fields = split(trim(line), /\s+/);
+   if (length(fields) < 10 || fields[3] != '0A' || !inodes[fields[9]]) continue;
+   let endpoint = split(fields[1], ':');
+   let address;
+   if (family == 'tcp') {
+    let bytes = [];
+    for (let offset = 6; offset >= 0; offset -= 2) push(bytes, int(substr(endpoint[0], offset, 2), 16));
+    address = join('.', bytes);
+   } else address = '[' + endpoint[0] + ']';
+   push(result, address + ':' + int(endpoint[1], 16));
+  }
+ }
+ return result;
+}
+function status() {
+ let bus = connect();
+ let service = bus?.call('service', 'list', { name: 'vlmcsd' });
+ let instance = service?.vlmcsd?.instances?.main;
+ let pid = instance?.pid;
+ let proc = pid ? readfile(`/proc/${pid}/status`) : '';
+ let stat = pid ? split(readfile(`/proc/${pid}/stat`) || '', ' ') : [];
+ let uptime = +(split(readfile('/proc/uptime') || '0', ' ')[0]);
+ let memory = match(proc || '', /VmRSS:\s+(\d+)/);
+ let uci = cursor();
+ let c = uci.get_all('vlmcsd', 'main') || {};
+ let lines = listeners(pid);
+ bus?.disconnect();
+ return {
+  running: !!instance?.running, pid: pid || 0,
+  enabled: c.enabled == '1', interface: c.interface || 'lan', port: +(c.port || '1688'),
+  source_commit: trim(readfile('/usr/share/vlmcsd/source-commit') || ''),
+  version: trim(readfile('/usr/share/vlmcsd/version') || 'unknown'), memory_kib: memory ? +memory[1] : 0,
+  uptime_seconds: length(stat) > 21 ? max(0, int(uptime - (+stat[21] / 100))) : 0,
+  listeners: lines,
+  exit_code: instance?.exit_code,
+  respawn: instance?.respawn
+ };
+}
+return {
+ 'luci.vlmcsd': {
+  status: { call: function() { return status(); } },
+  logs: { call: function() { return command('/usr/libexec/vlmcsd-helper logs'); } },
+  action: {
+   args: { action: '' },
+   call: function(request) {
+    let a = request.args.action;
+    if (index(['start', 'stop', 'restart', 'reload'], a) < 0)
+     return { ok: false, output: 'Invalid action' };
+    return command('/usr/libexec/vlmcsd-timeout 10 /etc/init.d/vlmcsd ' + a);
+   }
+  },
+  selftest: {
+   args: { protocol: 6 },
+   call: function(request) {
+    let p = request.args.protocol;
+    if (index([4, 5, 6], p) < 0) return { ok: false, output: 'Invalid protocol' };
+    return command('/usr/libexec/vlmcsd-helper selftest ' + p);
+   }
+  }
+ }
+};

@@ -1,0 +1,5 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils e2fsprogs openssh-client ca-certificates curl python3 zstd && rm -rf /var/lib/apt/lists/*
+WORKDIR /work

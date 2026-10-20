@@ -1,0 +1,88 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+"Language: zh_Hans\n"
+
+msgid "Volume License Service"
+msgstr "批量许可服务"
+
+msgid "LAN IPv4 service. DNS discovery is disabled by default."
+msgstr "仅服务于 LAN IPv4；DNS 自动发现默认关闭。"
+
+msgid "Enable"
+msgstr "启用"
+
+msgid "LAN interface"
+msgstr "LAN 逻辑接口"
+
+msgid "Port"
+msgstr "端口"
+
+msgid "Maximum workers"
+msgstr "最大工作数"
+
+msgid "Connection timeout (seconds)"
+msgstr "连接超时（秒）"
+
+msgid "Verbose logging"
+msgstr "详细日志"
+
+msgid "DNS discovery"
+msgstr "DNS 自动发现"
+
+msgid "Publish a managed _vlmcs._tcp record in the local DNS domain."
+msgstr "在本地域发布由本应用管理的 _vlmcs._tcp 记录。"
+
+msgid "Status"
+msgstr "状态"
+
+msgid "Running"
+msgstr "运行中"
+
+msgid "Stopped"
+msgstr "已停止"
+
+msgid "Version"
+msgstr "版本"
+
+msgid "Source commit"
+msgstr "源码提交"
+
+msgid "Uptime (seconds)"
+msgstr "运行时间（秒）"
+
+msgid "Listeners"
+msgstr "实际监听"
+
+msgid "None"
+msgstr "无"
+
+msgid "No recent logs"
+msgstr "暂无近期日志"
+
+msgid "Start"
+msgstr "启动"
+
+msgid "Stop"
+msgstr "停止"
+
+msgid "Restart"
+msgstr "重启"
+
+msgid "Protocol diagnostics"
+msgstr "协议诊断"
+
+msgid "Tests send one request to this router. Status polling does not send requests."
+msgstr "每次诊断向本路由器发送一个请求；状态轮询不发送请求。"
+
+msgid "Testing…"
+msgstr "正在诊断…"
+
+msgid "Recent logs"
+msgstr "近期日志"
+
+msgid "Refresh logs"
+msgstr "刷新日志"
+
+msgid "Download logs"
+msgstr "下载日志"

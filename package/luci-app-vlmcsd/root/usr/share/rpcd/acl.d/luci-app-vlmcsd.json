@@ -1,0 +1,7 @@
+{
+ "luci-app-vlmcsd": {
+  "description": "Manage only the vlmcsd service",
+  "read": {"uci": ["vlmcsd"], "ubus": {"luci.vlmcsd": ["status", "logs"]}},
+  "write": {"uci": ["vlmcsd"], "ubus": {"luci.vlmcsd": ["action", "selftest"]}}
+ }
+}
