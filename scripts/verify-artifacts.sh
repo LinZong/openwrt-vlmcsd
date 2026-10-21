@@ -7,7 +7,7 @@ release="$RELEASE_PATH"
 build_env=$(python3 scripts/build_config.py shell --config "$release/build-config.json")
 eval "$build_env"
 apk="$SDK_PATH/staging_dir/host/bin/apk"
-report="dist/verification/$OPENWRT_VERSION"
+report="$VERIFICATION_PATH"
 mkdir -p "$report"
 (cd "$release" && sha256sum -c SHA256SUMS)
 extract=$(mktemp -d /work/.cache/verify-elf.XXXXXX)
@@ -40,9 +40,11 @@ for program in vlmcsd vlmcs vlmcsd-timeout; do
  esac
  file "$path"
  readelf -h -l -d "$path" > "$report/$program.elf.txt"
+ grep -q 'Class:.*ELF64' "$report/$program.elf.txt"
+ grep -q 'Data:.*little endian' "$report/$program.elf.txt"
  grep -q 'Type:.*DYN' "$report/$program.elf.txt"
- grep -q 'Advanced Micro Devices X86-64' "$report/$program.elf.txt"
- grep -Fq "/lib/ld-$SDK_LIBC-$OPENWRT_ARCH.so.1" "$report/$program.elf.txt"
+ grep -Fq "$ELF_MACHINE" "$report/$program.elf.txt"
+ grep -Fq "$ELF_INTERPRETER" "$report/$program.elf.txt"
  grep -q GNU_RELRO "$report/$program.elf.txt"
  grep -q BIND_NOW "$report/$program.elf.txt"
  ! grep GNU_STACK "$report/$program.elf.txt" | grep -q RWE

@@ -20,18 +20,36 @@ jobs:
       fail-fast: false
       matrix:
         profile: ['23.05', '24.10', '25.12']
+        target: ['x86/64', 'armsr/armv8', 'mediatek/filogic', 'rockchip/armv8']
     steps:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
       - name: Build on Linux Docker Engine
         env:
           OPENWRT_PROFILE: ${{ matrix.profile }}
+          OPENWRT_TARGET: ${{ matrix.target }}
           BUILD_JOBS: '2'
         run: ./scripts/build.sh
       - name: Verify signatures and ELF hardening
         env:
           OPENWRT_PROFILE: ${{ matrix.profile }}
+          OPENWRT_TARGET: ${{ matrix.target }}
         run: |
           eval "$(python3 scripts/build_config.py shell)"
           docker run --rm --platform "$BUILDER_PLATFORM" --user "$(id -u):$(id -g)" \
-            -e HOME=/work/.cache/builder-home -e OPENWRT_PROFILE \
+            -e HOME=/work/.cache/builder-home -e OPENWRT_PROFILE -e OPENWRT_TARGET \
             -v "$PWD:/work" "$BUILDER_IMAGE" bash scripts/verify-artifacts.sh
+      - name: Check reproducibility and ARM64 execution
+        env:
+          OPENWRT_PROFILE: ${{ matrix.profile }}
+          OPENWRT_TARGET: ${{ matrix.target }}
+          BUILD_JOBS: '2'
+        run: |
+          eval "$(python3 scripts/build_config.py shell)"
+          docker run --rm --platform "$BUILDER_PLATFORM" --user "$(id -u):$(id -g)" \
+            -e HOME=/work/.cache/builder-home -e OPENWRT_PROFILE -e OPENWRT_TARGET -e BUILD_JOBS \
+            -v "$PWD:/work" "$BUILDER_IMAGE" python3 scripts/reproducibility.py
+          if [ "$OPENWRT_TARGET" != x86/64 ]; then
+            docker run --rm --platform "$BUILDER_PLATFORM" --user "$(id -u):$(id -g)" \
+              -e HOME=/work/.cache/builder-home -e OPENWRT_PROFILE -e OPENWRT_TARGET \
+              -v "$PWD:/work" "$BUILDER_IMAGE" python3 scripts/user-mode-test.py
+          fi

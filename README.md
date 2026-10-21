@@ -10,11 +10,21 @@ The daemon runs as a dedicated unprivileged user, listens on the selected privat
 
 | OpenWrt series | Pinned build target | Native format | Service and full LuCI | Transactional deployment/rollback |
 | --- | --- | --- | --- | --- |
-| 23.05 | 23.05.6, x86_64/musl | IPK / opkg | Supported | Use native opkg installation |
-| 24.10 | 24.10.6, x86_64/musl | IPK / opkg | Supported | Use native opkg installation |
-| 25.12 | 25.12.1, x86_64/musl | APK 3 / apk | Supported | Supported |
+| 23.05 | 23.05.6, x86_64 + ARM64/musl | IPK / opkg | Supported | Use native opkg installation |
+| 24.10 | 24.10.6, x86_64 + ARM64/musl | IPK / opkg | Supported | Use native opkg installation |
+| 25.12 | 25.12.1, x86_64 + ARM64/musl | APK 3 / apk | Supported | Supported |
 
-Each target uses its matching official SDK. Packages are not interchangeable between these releases. Other patch versions require updating the SDK/image pins and validating a matching guest; other architectures require additional build and VM work. Legacy release compatibility does not imply ongoing security support from OpenWrt. See [compatibility and validation](docs/compatibility.md) for the test scope.
+Each target uses its matching official SDK. Packages are not interchangeable between these releases. Other patch versions require updating the SDK/image pins and validating a matching guest; supported targets are listed below; ARMv7 is outside this phase. Legacy release compatibility does not imply ongoing security support from OpenWrt. See [compatibility and validation](docs/compatibility.md) for the test scope.
+
+### ARM64 targets
+
+| `--target` | Package architecture | Validation environment |
+| --- | --- | --- |
+| `armsr/armv8` | `aarch64_generic` | Matching SDK and full-system QEMU |
+| `mediatek/filogic` | `aarch64_cortex-a53` | Matching SDK and QEMU user mode |
+| `rockchip/armv8` | `aarch64_generic` | Matching SDK and ABI-compatible ARMsr guest |
+
+All three targets are configured for each pinned release. Consult the [validation record](docs/compatibility.md#arm64-validation) for completed checks; emulator results do not establish physical-board validation. Packages target the selected OpenWrt ABI and release; a single generic “arm64” package does not cover every ARM64 router. Check `/etc/openwrt_release` (`DISTRIB_TARGET`, `DISTRIB_ARCH`, `DISTRIB_RELEASE`) before choosing a build.
 
 ## Build
 
@@ -24,9 +34,12 @@ Requirements: Python 3.10+, Bash, curl, and a working Docker CLI/daemon. [Docker
 ./scripts/build.sh                    # Default: OpenWrt 25.12
 ./scripts/build.sh --profile 23.05
 ./scripts/build.sh --profile 24.10
+./scripts/build.sh --profile 25.12 --target mediatek/filogic
+./scripts/build.sh --profile 24.10 --target rockchip/armv8
+./scripts/build.sh --profile 23.05 --target armsr/armv8
 ```
 
-`OPENWRT_PROFILE=23.05` is an equivalent environment setting, also used by artifact verification, reproducibility checks, and the test VM. Compilation uses available container CPUs, including cgroup v2 quota limits. Set `BUILD_JOBS=4` to limit parallelism, or `BUILD_JOBS=1` for serial builds. Containers use your UID/GID so native Linux bind mounts remain writable.
+`OPENWRT_PROFILE=23.05 OPENWRT_TARGET=armsr/armv8` selects a release and target through the environment. Command-line selectors take precedence; defaults remain 25.12 and x86/64. These settings are used by artifact verification, reproducibility checks, and the test VM. Compilation uses available container CPUs, including cgroup v2 quota limits. Set `BUILD_JOBS=4` to limit parallelism, or `BUILD_JOBS=1` for serial builds. Containers use your UID/GID so native Linux bind mounts remain writable.
 
 Verified SDK archives, authenticated official checksums/signatures/keys, Git objects, generated source archives, Docker layers, and SDK downloads are reused locally. Corrupted downloads are replaced only after verification. SDK caches are isolated by target; upstream Git/source caches are shared. Initial downloads and SDK preparation can take several minutes.
 
@@ -35,12 +48,13 @@ Verified SDK archives, authenticated official checksums/signatures/keys, Git obj
 | 25.12.1 | `dist/release/` | `.cache/build.log` |
 | 23.05.6 | `dist/release-23.05.6-x86_64/` | `.cache/sdk-cache/23.05.6-x86_64/build.log` |
 | 24.10.6 | `dist/release-24.10.6-x86_64/` | `.cache/sdk-cache/24.10.6-x86_64/build.log` |
+| ARM64 | `dist/release-<version>-<target>-<subtarget>/` | `.cache/sdk-cache/<version>-<target>-<subtarget>/build.log` |
 
 Releases contain four application packages, the public key, recovery timeout binary, licenses, `release.json`, frozen `build-config.json`, generated `upstream.json`, and `SHA256SUMS`. APKs are individually signed. Native IPKs are unchanged SDK output; their bundle has a detached RSA signature, `SHA256SUMS.sig`. The private key is stored in `.secrets/`: keep it private and back it up.
 
 ## Update pinned inputs
 
-Edit only [`config/build.json`](config/build.json), then rebuild the selected profile. `OPENWRT_PROFILES` holds series-specific SDK and image overrides; shared settings remain at the top level.
+Edit only [`config/build.json`](config/build.json), then rebuild the selected profile. `OPENWRT_TARGETS` records package ABIs; `OPENWRT_PROFILES.<series>.TARGETS` holds SDK hashes and ARMsr kernel/rootfs pins by target; shared settings remain at the top level.
 
 | Setting | Purpose |
 | --- | --- |
@@ -49,7 +63,7 @@ Edit only [`config/build.json`](config/build.json), then rebuild the selected pr
 | `UPSTREAM_REPOSITORY`, `UPSTREAM_COMMIT` | GitHub `owner/repository` and a complete 40-character commit SHA. These are the only upstream inputs. |
 | `PACKAGE_RELEASE` | OpenWrt packaging revision. |
 | `CONTAINER_BASE_IMAGE`, `BUILDER_PLATFORM` | Container image digest and SDK execution platform. |
-| `VM_IMAGE_SHA256` | Matching official test image checksum. |
+| `VM_IMAGE_SHA256`, `VM_KERNEL_SHA256` | Matching official test disk/rootfs and ARM64 kernel checksums. |
 
 `scripts/upstream.py` fetches the exact Git commit, checks object integrity, and generates a deterministic `git archive`/gzip source package. The upstream version is `YYYYMMDD~<first 12 commit characters>`, using the commit's UTC timestamp; package revisions use `-rN` for APK or `-N` for IPK. `SOURCE_DATE_EPOCH` and source SHA256 are generated, never hand-maintained. Git archive scope does not recursively include submodules; the pinned upstream's wiki submodule is not needed to compile the C sources.
 
@@ -87,6 +101,8 @@ The transaction scripts require APK releases and reject IPK input before connect
 
 ```sh
 ./scripts/deploy.sh plan --target gateway
+# ARM64 example: select the exact target release explicitly
+./scripts/deploy.sh plan --target arm-router --release dist/release-25.12.1-mediatek-filogic
 ```
 
 Review `dist/plans/deploy-gateway.json` and its Markdown report, including device identity, package/key hashes, configuration changes, and test results. Explicitly apply that reviewed plan:
@@ -107,6 +123,8 @@ The driver checks device state and artifact hashes again, stages the materials, 
 ```
 
 Router journals persist in `/root/vlmcsd-deploy/`; local reports are under `dist/transactions/`. After an SSH interruption, query the existing transaction before trying another apply. Reports include configuration/account metadata and should be treated as sensitive backups.
+
+New manifests bind deployment to the exact release, OpenWrt target and package architecture. Legacy manifests without a target remain x86-only. Rollback packages are checked against their actual APK name/version/architecture.
 
 An upgrade needs the exact previous APK bytes in `dist/rollback-package-cache/`; plans fail if they are unavailable. Rollback uses the package manager. Recovery failure or concurrent configuration changes are reported for manual intervention, with recovery materials retained. Uninstall retains application configuration and transaction backups; `--purge` on the uninstall plan explicitly removes application configuration. Only owned, unused dependencies/accounts are eligible for removal.
 
@@ -143,3 +161,16 @@ Contributors and coding agents should read [AGENTS.md](AGENTS.md) before making 
 ## Licenses
 
 The daemon/client retain the upstream TheFlightSims OSS License, included in each release. New OpenWrt integration, LuCI code, scripts, and the recovery timeout tool are licensed under [Apache-2.0](LICENSE). Keep both licenses when redistributing packages.
+
+## ARM64 verification commands
+
+Run inside the selected builder container, with the repository mounted at `/work`:
+
+```sh
+export OPENWRT_PROFILE=25.12 OPENWRT_TARGET=armsr/armv8
+bash scripts/verify-artifacts.sh
+python3 scripts/reproducibility.py
+python3 scripts/user-mode-test.py
+```
+
+For a full guest, run `./scripts/vm.sh --profile 23.05 --target armsr/armv8 reset`, then `OPENWRT_PROFILE=23.05 OPENWRT_TARGET=armsr/armv8 python3 tests/ipk_integration.py`. The native integration suite also accepts APK packages; transactional APK tests additionally use `tests/integration.py` after guest dependency preparation. Guest disks and SSH credentials are isolated by release/VM target. Guests share loopback ports and must run sequentially. `vm.sh stop` removes the test container; disks remain cached. Physical-board targets do not boot their board firmware under the generic emulator.

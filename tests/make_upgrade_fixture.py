@@ -7,10 +7,14 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
+from build_config import load_config
+config = load_config(require_upstream=True)
 root = Path('/work')
-apk = root / '.cache/sdk/staging_dir/host/bin/apk'
-source = root / 'dist/release'
-out = root / 'dist/test-old-release'
+apk = root / config['SDK_PATH'] / 'staging_dir/host/bin/apk'
+source = root / config['RELEASE_PATH']
+out = root / ('dist/test-old-release-' + config['REPORT_SUFFIX'])
 if out.exists():
     shutil.rmtree(out)
 out.mkdir()
@@ -22,7 +26,7 @@ if int(revision) < 1:
 old_version = f'{version}-r{int(revision) - 1}'
 packages = []
 for package in manifest['packages']:
-    work = root / '.cache' / ('fixture-' + package['name'])
+    work = root / '.cache' / ('fixture-' + config['REPORT_SUFFIX'] + '-' + package['name'])
     if work.exists():
         shutil.rmtree(work)
     work.mkdir()
@@ -54,6 +58,8 @@ for package in manifest['packages']:
     packages.append({**package, 'version': old_version, 'file': dest.name})
 for name in ['recovery-timeout', 'vlmcsd.pem', 'LICENSE.vlmcsd', 'LICENSE.integration', 'build-config.json', 'upstream.json']:
     shutil.copy2(source / name, out / name)
+# This public fixture binary must remain readable by the host test runner.
+(out / 'recovery-timeout').chmod(0o755)
 manifest['packages'] = packages
 manifest['files'] = [{'file': p.name, 'sha256': hashlib.sha256(p.read_bytes()).hexdigest(), 'size': p.stat().st_size} for p in sorted(out.iterdir())]
 (out / 'release.json').write_text(json.dumps(manifest, sort_keys=True, indent=2) + '\n')

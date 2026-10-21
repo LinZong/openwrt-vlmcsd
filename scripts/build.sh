@@ -1,12 +1,15 @@
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-if [ "${1:-}" = --profile ] && [ "$#" = 2 ]; then
- export OPENWRT_PROFILE=$2
-elif [ "$#" != 0 ]; then
- echo 'Usage: build.sh [--profile 23.05|24.10|25.12]' >&2
- exit 2
-fi
+while [ "$#" -gt 0 ]; do
+ case "$1" in
+  --profile|--target)
+   [ "$#" -ge 2 ] || { echo "Missing value for $1" >&2; exit 2; }
+   case "$1" in --profile) export OPENWRT_PROFILE=$2;; --target) export OPENWRT_TARGET=$2;; esac
+   shift 2;;
+  *) echo 'Usage: build.sh [--profile 23.05|24.10|25.12] [--target target/subtarget]' >&2; exit 2;;
+ esac
+done
 build_env=$(python3 scripts/build_config.py shell)
 eval "$build_env"
 python3 scripts/build_helpers.py jobs >/dev/null
@@ -31,7 +34,7 @@ download_checked "$SDK_URL/$SDK_FILE" "$SDK_ARCHIVE_PATH" "$SDK_SHA256"
 builder_user="$(id -u):$(id -g)"
 mkdir -p .cache/builder-home
 docker build --platform "$BUILDER_PLATFORM" --build-arg "BASE_IMAGE=$CONTAINER_BASE_IMAGE" -t "$BUILDER_IMAGE" -f scripts/Dockerfile . > "$SDK_METADATA_PATH/container-build.log" 2>&1
-container=(docker run --rm --platform "$BUILDER_PLATFORM" --user "$builder_user" -e HOME=/work/.cache/builder-home -e "OPENWRT_PROFILE=${OPENWRT_PROFILE:-}" -e "BUILD_JOBS=${BUILD_JOBS:-}" -v "$PWD:/work" "$BUILDER_IMAGE")
+container=(docker run --rm --platform "$BUILDER_PLATFORM" --user "$builder_user" -e HOME=/work/.cache/builder-home -e "OPENWRT_PROFILE=${OPENWRT_PROFILE:-}" -e "OPENWRT_TARGET=$OPENWRT_TARGET" -e "BUILD_JOBS=${BUILD_JOBS:-}" -v "$PWD:/work" "$BUILDER_IMAGE")
 printf 'Preparing OpenWrt %s SDK (%s)\n' "$OPENWRT_VERSION" "$PACKAGE_FORMAT"
 "${container[@]}" bash -ec '
  if [ "$(id -u)" = 0 ]; then export FORCE=1; fi

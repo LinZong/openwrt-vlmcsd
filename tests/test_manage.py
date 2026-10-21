@@ -12,8 +12,8 @@ spec.loader.exec_module(m)
 
 class TransactionSafety(unittest.TestCase):
     def test_device_requirements_follow_the_selected_release(self):
-        manifest = {'openwrt': 'test-release', 'arch': 'test-arch'}
-        snapshot = {'board': {'DISTRIB_RELEASE': 'test-release', 'DISTRIB_ARCH': 'test-arch'},
+        manifest = {'openwrt': 'test-release', 'arch': 'test-arch', 'target': 'test/target'}
+        snapshot = {'board': {'DISTRIB_RELEASE': 'test-release', 'DISTRIB_ARCH': 'test-arch', 'DISTRIB_TARGET': 'test/target'},
                     'pending': '', 'available_kib': 32768, 'listening': ''}
         m.baseline_check(snapshot, manifest)
         for key in ['DISTRIB_RELEASE', 'DISTRIB_ARCH']:

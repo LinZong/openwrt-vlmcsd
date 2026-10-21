@@ -16,6 +16,7 @@ STRING_KEYS = {
     'UPSTREAM_REPOSITORY', 'UPSTREAM_COMMIT',
     'CONTAINER_BASE_IMAGE', 'BUILDER_PLATFORM', 'VM_IMAGE_SHA256',
 }
+OPTIONAL_KEYS = {'VM_KERNEL_SHA256'}
 INTEGER_KEYS = {'PACKAGE_RELEASE'}
 GENERATED_KEYS = {'UPSTREAM_VERSION', 'UPSTREAM_SHA256', 'SOURCE_DATE_EPOCH'}
 
@@ -44,30 +45,57 @@ def validate_upstream_lock(config, lock):
             'SOURCE_DATE_EPOCH': str(epoch), 'UPSTREAM_TREE': lock['tree']}
 
 
-def load_config(path=CONFIG, *, require_upstream=False, profile=None):
+def load_config(path=CONFIG, *, require_upstream=False, profile=None, target=None):
     path = Path(path).resolve()
     config = json.loads(path.read_text())
+    targets = config.pop('OPENWRT_TARGETS', {})
+    if not isinstance(targets, dict):
+        raise ValueError('OPENWRT_TARGETS must be an object')
+    for name, values in targets.items():
+        if (not re.fullmatch(r'[a-z0-9_]+/[a-z0-9_]+', name)
+                or not isinstance(values, dict) or set(values) != {'OPENWRT_ARCH'}):
+            raise ValueError('Invalid OpenWrt target: ' + name)
     profiles = config.pop('OPENWRT_PROFILES', {})
     if not isinstance(profiles, dict):
         raise ValueError('OPENWRT_PROFILES must be an object')
     allowed = {'OPENWRT_VERSION', 'SDK_GCC_VERSION', 'SDK_SHA256',
-               'VM_IMAGE_SHA256', 'OPENWRT_KEY_FINGERPRINT'}
+               'VM_IMAGE_SHA256', 'OPENWRT_KEY_FINGERPRINT', 'TARGETS'}
     for name, overrides in profiles.items():
         if not re.fullmatch(r'[0-9]+\.[0-9]+', name) or not isinstance(overrides, dict) or set(overrides) - allowed:
             raise ValueError('Invalid OpenWrt profile: ' + name)
+        target_pins = overrides.get('TARGETS', {})
+        if not isinstance(target_pins, dict):
+            raise ValueError('TARGETS must be an object')
+        for hardware, pins in target_pins.items():
+            if (hardware not in targets or not isinstance(pins, dict)
+                    or set(pins) - {'SDK_SHA256', 'VM_IMAGE_SHA256', 'VM_KERNEL_SHA256'}
+                    or 'SDK_SHA256' not in pins):
+                raise ValueError('Invalid target pins: ' + hardware)
     # Frozen release snapshots must not depend on the caller's profile.
     selected = profile or os.environ.get('OPENWRT_PROFILE', '')
     if path.name != 'build-config.json' and selected:
         if selected not in profiles:
             raise ValueError('Unknown OpenWrt profile: ' + selected)
-        config.update(profiles[selected])
+        config.update({k: v for k, v in profiles[selected].items() if k != 'TARGETS'})
+    if path.name != 'build-config.json':
+        hardware = target or os.environ.get('OPENWRT_TARGET') or config['OPENWRT_TARGET']
+        series_name = selected or '.'.join(config['OPENWRT_VERSION'].split('.')[:2])
+        if hardware != 'x86/64':
+            if hardware not in targets:
+                raise ValueError('Unknown OpenWrt target: ' + hardware)
+            pins = profiles.get(series_name, {}).get('TARGETS', {}).get(hardware)
+            if not pins:
+                raise ValueError('Missing SDK pins for ' + series_name + ' ' + hardware)
+            config.update(targets[hardware])
+            config.update(pins)
+        config['OPENWRT_TARGET'] = hardware
     # Release snapshots retain generated fields, including older release snapshots.
     generated = {}
     if path.name == 'build-config.json' and GENERATED_KEYS <= config.keys():
         generated = {key: config.pop(key) for key in GENERATED_KEYS}
-    if set(config) != STRING_KEYS | INTEGER_KEYS:
+    if (set(config) - OPTIONAL_KEYS != STRING_KEYS | INTEGER_KEYS):
         raise ValueError('Build config has missing or unknown keys')
-    for key in STRING_KEYS:
+    for key in STRING_KEYS | (OPTIONAL_KEYS & config.keys()):
         value = config[key]
         if not isinstance(value, str) or not re.fullmatch(r'[A-Za-z0-9_./:@+-]+', value):
             raise ValueError(f'Invalid build config value: {key}')
@@ -88,10 +116,12 @@ def load_config(path=CONFIG, *, require_upstream=False, profile=None):
     for key in ['OPENWRT_VERSION', 'SDK_GCC_VERSION']:
         if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', config[key]):
             raise ValueError(key + ' must be a three-part release number')
-    if config['SDK_LIBC'] != 'musl' or config['OPENWRT_DEVICE'] != 'generic':
-        raise ValueError('Only the generic x86_64 musl target is currently supported')
+    if config['SDK_LIBC'] != 'musl':
+        raise ValueError('Only musl SDKs are supported')
+    if 'VM_KERNEL_SHA256' in config and not re.fullmatch(r'[a-fA-F0-9]{64}', config['VM_KERNEL_SHA256']):
+        raise ValueError('VM_KERNEL_SHA256 must contain 64 hexadecimal characters')
     c = {key: str(value) for key, value in config.items()}
-    for key in ['SDK_SHA256', 'VM_IMAGE_SHA256', 'UPSTREAM_COMMIT']:
+    for key in ['SDK_SHA256', 'VM_IMAGE_SHA256', 'UPSTREAM_COMMIT'] + sorted(OPTIONAL_KEYS & c.keys()):
         c[key] = c[key].lower()
     c['OPENWRT_KEY_FINGERPRINT'] = c['OPENWRT_KEY_FINGERPRINT'].upper()
     target = c['OPENWRT_TARGET'].replace('/', '-')
@@ -101,16 +131,24 @@ def load_config(path=CONFIG, *, require_upstream=False, profile=None):
         raise ValueError('Profile name does not match its OpenWrt release series')
     if series not in {'23.05', '24.10', '25.12'}:
         raise ValueError('Supported OpenWrt series: 23.05, 24.10, 25.12')
-    if c['OPENWRT_TARGET'] != 'x86/64' or c['OPENWRT_ARCH'] != 'x86_64':
-        raise ValueError('Only x86/64 (x86_64) is currently supported')
+    expected_arch = {'x86/64': 'x86_64', 'armsr/armv8': 'aarch64_generic',
+                     'mediatek/filogic': 'aarch64_cortex-a53', 'rockchip/armv8': 'aarch64_generic'}
+    if expected_arch.get(c['OPENWRT_TARGET']) != c['OPENWRT_ARCH']:
+        raise ValueError('Unsupported target or mismatched package architecture')
+    if c['OPENWRT_TARGET'] == 'armsr/armv8' and 'VM_KERNEL_SHA256' not in c:
+        raise ValueError('ARMsr requires a pinned VM_KERNEL_SHA256')
+    arm = c['OPENWRT_TARGET'] != 'x86/64'
+    c['ELF_MACHINE'] = 'AArch64' if arm else 'Advanced Micro Devices X86-64'
+    c['ELF_INTERPRETER'] = '/lib/ld-musl-' + ('aarch64' if arm else 'x86_64') + '.so.1'
+    c['QEMU_CPU'] = 'cortex-a53' if c['OPENWRT_TARGET'] == 'mediatek/filogic' else 'cortex-a57'
     c['PACKAGE_FORMAT'] = 'apk' if series == '25.12' else 'ipk'
     c['PACKAGE_MANAGER'] = 'apk' if series == '25.12' else 'opkg'
     c['SDK_COMPRESSION'] = 'xz' if series == '23.05' else 'zst'
-    suffix = c['OPENWRT_VERSION'] + '-' + c['OPENWRT_ARCH']
-    c['SDK_PATH'] = '.cache/sdk' if c['PACKAGE_FORMAT'] == 'apk' else '.cache/sdk-' + suffix
-    c['SDK_METADATA_PATH'] = '.cache' if c['PACKAGE_FORMAT'] == 'apk' else '.cache/sdk-cache/' + suffix
+    suffix = c['OPENWRT_VERSION'] + '-' + (target if arm else c['OPENWRT_ARCH'])
+    c['SDK_PATH'] = '.cache/sdk' if c['PACKAGE_FORMAT'] == 'apk' and not arm else '.cache/sdk-' + suffix
+    c['SDK_METADATA_PATH'] = '.cache' if c['PACKAGE_FORMAT'] == 'apk' and not arm else '.cache/sdk-cache/' + suffix
     c['SDK_ARCHIVE_PATH'] = c['SDK_METADATA_PATH'] + '/sdk.tar.' + c['SDK_COMPRESSION']
-    c['RELEASE_PATH'] = 'dist/release' if c['PACKAGE_FORMAT'] == 'apk' else 'dist/release-' + suffix
+    c['RELEASE_PATH'] = 'dist/release' if c['PACKAGE_FORMAT'] == 'apk' and not arm else 'dist/release-' + suffix
     c['SDK_FILE'] = f"openwrt-sdk-{c['OPENWRT_VERSION']}-{target}_gcc-{c['SDK_GCC_VERSION']}_{c['SDK_LIBC']}.Linux-x86_64.tar.{c['SDK_COMPRESSION']}"
     c['OPENWRT_KEY_URL'] = f"https://raw.githubusercontent.com/openwrt/keyring/master/gpg/0x{c['OPENWRT_KEY_FINGERPRINT'][-16:]}.asc"
     c['UPSTREAM_URL'] = f"https://github.com/{c['UPSTREAM_REPOSITORY']}"
@@ -120,13 +158,19 @@ def load_config(path=CONFIG, *, require_upstream=False, profile=None):
     c['BUILDER_IMAGE'] = f"vlmcsd-builder:{c['OPENWRT_VERSION']}"
     c['VM_CONTAINER_IMAGE'] = f"vlmcsd-vm:{c['OPENWRT_VERSION']}"
     c['VM_FILE'] = f"openwrt-{c['OPENWRT_VERSION']}-{target}-{c['OPENWRT_DEVICE']}-ext4-combined.img.gz"
+    c['VM_PATH'] = '.cache/vm-' + c['OPENWRT_VERSION'] + '-armsr-armv8' if arm else '.cache'
+    if arm:
+        c['VM_FILE'] = f"openwrt-{c['OPENWRT_VERSION']}-armsr-armv8-generic-ext4-rootfs.img.gz"
+    c['VM_KERNEL_FILE'] = f"openwrt-{c['OPENWRT_VERSION']}-armsr-armv8-generic-kernel.bin"
+    c['VERIFICATION_PATH'] = 'dist/verification/' + (suffix if arm else c['OPENWRT_VERSION'])
+    c['REPORT_SUFFIX'] = suffix if arm else c['OPENWRT_VERSION']
     c['VM_URL'] = f"{c['SDK_URL']}/{c['VM_FILE']}"
     target, subtarget = c['OPENWRT_TARGET'].split('/')
     c['TARGET_BOARD'] = target
     c['TARGET_SUBTARGET'] = f'{target}_{subtarget}'
     # Changes to the image or its offline setup must not reuse an old guest disk.
     vm_setup = Path(__file__).with_name('vm-prepare.sh').read_bytes()
-    c['VM_CACHE_KEY'] = hashlib.sha256(c['VM_IMAGE_SHA256'].encode() + vm_setup).hexdigest()
+    c['VM_CACHE_KEY'] = hashlib.sha256((c['VM_IMAGE_SHA256'] + c.get('VM_KERNEL_SHA256', '') + c['OPENWRT_TARGET']).encode() + vm_setup).hexdigest()
     if generated:
         if (not isinstance(generated['UPSTREAM_VERSION'], str)
                 or not re.fullmatch(r'[A-Za-z0-9_.~+-]+', generated['UPSTREAM_VERSION'])
@@ -170,12 +214,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('format', choices=['shell', 'make', 'json'])
     parser.add_argument('--profile', help='OpenWrt series from OPENWRT_PROFILES (or OPENWRT_PROFILE)')
+    parser.add_argument('--target', help='OpenWrt target/subtarget (or OPENWRT_TARGET)')
     parser.add_argument('--config', type=Path, default=CONFIG)
     parser.add_argument('--sdk-checksums', type=Path, help='Require the configured SDK in this signed checksum list')
     parser.add_argument('--require-upstream', action='store_true', help='Require generated upstream metadata')
     args = parser.parse_args()
     try:
-        config = load_config(args.config, profile=args.profile, require_upstream=args.require_upstream or args.format == 'make')
+        config = load_config(args.config, profile=args.profile, target=args.target, require_upstream=args.require_upstream or args.format == 'make')
         if args.sdk_checksums:
             verify_sdk_checksums(config, args.sdk_checksums)
         print(render(config, args.format), end='')

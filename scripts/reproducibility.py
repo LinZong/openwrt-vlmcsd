@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 from build_config import load_config, render
 from build_helpers import build_jobs
+from sdk_layout import sdk_layout
 
 root = Path(__file__).resolve().parent.parent
 config = load_config(require_upstream=True)
@@ -18,8 +19,11 @@ os.environ.update(STAGING_DIR_HOST=str(sdk / 'staging_dir/host'),
                   BUILD_JOBS=str(jobs), TZ='UTC', LC_ALL='C')
 
 
+layout = sdk_layout(sdk)
+
+
 def hashes():
-    build = sdk / f"build_dir/target-{config['OPENWRT_ARCH']}_{config['SDK_LIBC']}/vlmcsd-{config['UPSTREAM_COMMIT']}/bin"
+    build = Path(layout['build_dir']) / f"vlmcsd-{config['UPSTREAM_COMMIT']}/bin"
     files = [build / name for name in ['vlmcsd', 'vlmcs', 'vlmcsd-timeout']]
     for name in ['vlmcsd', 'vlmcs', 'luci-app-vlmcsd', 'luci-i18n-vlmcsd-zh-cn']:
         arch = config['OPENWRT_ARCH'] if name in {'vlmcsd', 'vlmcs'} else 'all'
@@ -36,7 +40,7 @@ for package in ['vlmcsd', 'luci-app-vlmcsd']:
         subprocess.check_call(['make', '-j' + str(jobs), '-r', '-C', 'package/' + package, 'TOPDIR=' + str(sdk), 'SOURCE_DATE_EPOCH=' + config['SOURCE_DATE_EPOCH'], target], cwd=sdk)
 after = hashes()
 result = {'ok': before == after, 'before': before, 'after': after}
-(root / ('dist/reproducibility-' + config['OPENWRT_VERSION'] + '.json')).write_text(json.dumps(result, sort_keys=True, indent=2) + '\n')
+(root / ('dist/reproducibility-' + config['REPORT_SUFFIX'] + '.json')).write_text(json.dumps(result, sort_keys=True, indent=2) + '\n')
 if before != after:
     raise SystemExit('Reproducibility comparison failed')
 print('Reproducible: binaries and all four unsigned native packages are byte-identical')

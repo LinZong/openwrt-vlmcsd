@@ -7,8 +7,13 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SSH = ['ssh', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new', '-o', f'UserKnownHostsFile={ROOT}/.cache/vm_known_hosts', '-i', f'{ROOT}/.cache/vm_id', '-p', '22222', 'root@127.0.0.1']
-COMMON = ['--target', 'root@127.0.0.1', '--port', '22222', '--identity', str(ROOT / '.cache/vm_id'), '--known-hosts', str(ROOT / '.cache/vm_known_hosts')]
+sys.path.insert(0, str(ROOT / 'scripts'))
+from build_config import load_config
+CONFIG = load_config(require_upstream=True)
+VM = ROOT / CONFIG['VM_PATH']
+RELEASE = ROOT / CONFIG['RELEASE_PATH']
+SSH = ['ssh', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=accept-new', '-o', f'UserKnownHostsFile={VM}/vm_known_hosts', '-i', f'{VM}/vm_id', '-p', '22222', 'root@127.0.0.1']
+COMMON = ['--target', 'root@127.0.0.1', '--port', '22222', '--identity', str(VM / 'vm_id'), '--known-hosts', str(VM / 'vm_known_hosts'), '--release', str(RELEASE)]
 RESULTS = []
 
 
@@ -47,9 +52,11 @@ def status():
 
 def main():
     board = json.loads(ssh('ubus call system board'))
-    assert 'QEMU' in board['model'], 'Refusing to test a non-QEMU target'
-    release = json.loads((ROOT / 'dist/release/release.json').read_text())
+    assert ('QEMU' in board['model'] or (board['model'] == 'linux,dummy-virt' and board['release']['target'] == 'armsr/armv8')), 'Refusing to test a non-QEMU target'
+    release = json.loads((RELEASE / 'release.json').read_text())
     assert board['release']['version'] == release['openwrt']
+    assert board['release']['target'] == CONFIG['OPENWRT_TARGET']
+    assert ssh(". /etc/openwrt_release; echo $DISTRIB_ARCH").strip() == CONFIG['OPENWRT_ARCH']
     check('deploy', lambda: plan_apply())
     def service():
         s = status()
@@ -129,7 +136,7 @@ def main():
 
 
 if __name__ == '__main__':
-    report = ROOT / 'dist' / 'integration-results.json'
+    report = ROOT / 'dist' / ('integration-results-' + CONFIG['REPORT_SUFFIX'] + '.json')
     try:
         board = main()
         report.write_text(json.dumps({'board': board, 'results': RESULTS, 'ok': True}, indent=2) + '\n')

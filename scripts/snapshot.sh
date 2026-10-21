@@ -19,7 +19,7 @@ json_add_string ownership "$(cat /root/vlmcsd-deploy/ownership.json 2>/dev/null 
 json_add_string group "$(grep '^vlmcsd:' /etc/group || true)"
 json_add_string account "$(grep '^vlmcsd:' /etc/passwd || true)"
 json_add_string boot_id "$(cat /proc/sys/kernel/random/boot_id)"
-json_add_string packages "$(apk query --from installed --format json --fields name,version,depends '*' 2>/dev/null)"
+json_add_string packages "$(apk query --from installed --format json --fields name,version,arch,depends '*' 2>/dev/null)"
 json_add_string world "$(cat /etc/apk/world)"
 json_add_string pending "$(uci changes)"
 json_add_string listening "$(ss -lntp 2>/dev/null || netstat -lnt 2>/dev/null || true)"

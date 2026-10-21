@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-包含服务、诊断客户端、中文 LuCI 和独立部署恢复工具。当前固定的 OpenWrt/上游版本、提交、校验值和容器基础镜像统一定义在 [`config/build.json`](config/build.json)。目标平台为 x86_64 / musl；OpenWrt 23.05、24.10 使用原生 IPK，25.12 使用 APK 3。
+包含服务、诊断客户端、中文 LuCI 和独立部署恢复工具。当前固定的 OpenWrt/上游版本、提交、校验值和容器基础镜像统一定义在 [`config/build.json`](config/build.json)。目标平台包括 x86_64 和下文列出的 ARM64，使用 musl；OpenWrt 23.05、24.10 使用原生 IPK，25.12 使用 APK 3。
 
 ## 构建
 
@@ -37,13 +37,13 @@ SDK 压缩包先校验本地 SHA256；官方校验清单、签名和发布公钥
 
 | 配置项 | 用途 |
 | --- | --- |
-| `OPENWRT_PROFILES` | 23.05、24.10、25.12 的固定发行版配置；覆盖同名公共配置，默认仍使用顶层的 25.12。 |
+| `OPENWRT_PROFILES`、`OPENWRT_TARGETS` | 固定发行版、目标包架构和各目标 SDK/测试镜像校验值；默认仍为 25.12、x86/64。 |
 | `OPENWRT_VERSION`、`SDK_GCC_VERSION`、`SDK_SHA256` | 固定 SDK 发行版、工具链和压缩包校验值；下载地址和文件名自动生成。 |
 | `OPENWRT_KEY_FINGERPRINT` | 校验 OpenWrt 发布公钥，公钥下载地址由完整指纹派生。 |
 | `UPSTREAM_REPOSITORY`、`UPSTREAM_COMMIT` | 上游只需填写 GitHub 的 `owner/repository` 和完整 40 位提交 SHA。 |
 | `PACKAGE_RELEASE` | 本项目的 OpenWrt 包修订号；与上游版本无关，默认保持现有值。 |
 | `CONTAINER_BASE_IMAGE`、`BUILDER_PLATFORM` | 固定容器基础镜像摘要和构建平台。 |
-| `VM_IMAGE_SHA256` | 校验与 OpenWrt 版本对应的测试 VM 镜像。 |
+| `VM_IMAGE_SHA256`、`VM_KERNEL_SHA256` | 校验对应版本的测试磁盘/rootfs，以及 ARM64 内核。 |
 
 `scripts/build_config.py` 使用 Python 标准库读取和校验配置，向 Shell、Python 和 Make 提供相同的派生值；可用 `python3 scripts/build_config.py json` 查看。构建时自动生成 SDK 内的 `vlmcsd-build.mk`，供两个包的 Makefile 使用，不要手动修改生成文件。Dockerfile 的 `BASE_IMAGE` 参数也由脚本从配置传入。
 
@@ -148,3 +148,41 @@ python3 tests/faults.py
 ## 贡献
 
 请阅读 [AGENTS.md](AGENTS.md)，其中说明项目结构、构建配置、测试命令和设备操作边界。
+
+## ARM64 构建与验证
+
+默认仍构建 OpenWrt 25.12.1、x86/64；新增目标覆盖三个固定版本：23.05.6、24.10.6、25.12.1。
+
+| `--target` | 包架构 | 验证环境 |
+| --- | --- | --- |
+| `armsr/armv8` | `aarch64_generic` | 独立 SDK、完整 QEMU 客体 |
+| `mediatek/filogic` | `aarch64_cortex-a53` | 独立 SDK、QEMU 用户态模拟 |
+| `rockchip/armv8` | `aarch64_generic` | 独立 SDK、ABI 匹配的 ARMsr 客体 |
+
+```sh
+./scripts/build.sh --profile 25.12 --target mediatek/filogic
+./scripts/build.sh --profile 24.10 --target rockchip/armv8
+./scripts/build.sh --profile 23.05 --target armsr/armv8
+```
+
+环境变量 `OPENWRT_PROFILE`、`OPENWRT_TARGET` 也可选择版本和目标，命令行优先。Docker 仍运行官方 Linux x86_64 SDK，交叉编译 ARM64；宿主机架构与软件包架构分别处理。ARMv7 不在本阶段范围。
+
+升级配置仍只修改 `config/build.json`：`OPENWRT_TARGETS` 记录包架构，`OPENWRT_PROFILES.<系列>.TARGETS` 保存各目标 SDK 校验值及 ARMsr 内核/rootfs 校验值。上游仍只配置仓库与提交。ARM 缓存、发布包和报告按精确版本与目标隔离，发布目录为 `dist/release-<版本>-<target>-<subtarget>/`，原有 x86 路径不变。
+
+选包前检查路由器 `/etc/openwrt_release` 的 `DISTRIB_RELEASE`、`DISTRIB_TARGET`、`DISTRIB_ARCH`；不存在适合所有 ARM64 路由器的统一安装包。23/24 使用原生 IPK/opkg 安装。25 可显式指定发布目录：
+
+```sh
+./scripts/deploy.sh plan --target arm-router --release dist/release-25.12.1-mediatek-filogic
+```
+
+新的事务部署严格匹配版本、目标和包架构，回滚读取 APK 实际包名、版本、架构；旧版缺少目标字段的清单只兼容 x86。部署、健康检查、恢复时限仍为 120/10/120 秒。
+
+在选定 builder 容器内设置 `OPENWRT_PROFILE` 和 `OPENWRT_TARGET`，依次运行 `bash scripts/verify-artifacts.sh`、`python3 scripts/reproducibility.py`、`python3 scripts/user-mode-test.py`。完整虚拟机示例：
+
+```sh
+./scripts/vm.sh --profile 23.05 --target armsr/armv8 reset
+OPENWRT_PROFILE=23.05 OPENWRT_TARGET=armsr/armv8 python3 tests/ipk_integration.py
+./scripts/vm.sh stop
+```
+
+原生安装测试也适用于 APK；25 的事务部署另用 `tests/integration.py`，需先准备匹配的官方运行依赖。虚拟机按版本隔离磁盘与 SSH 凭据，共用端口，因此测试串行执行。Filogic 只验证匹配 SDK 与用户态模拟，不向通用架构客体强制安装。Rockchip 在 ABI 匹配的通用客体安装不等同于真机验证。实际完成情况见[兼容性记录](docs/compatibility.md#arm64-validation)。

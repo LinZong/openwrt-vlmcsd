@@ -19,11 +19,11 @@ Inspect `git status` before editing. Preserve unrelated and pre-existing changes
 
 ## Build invariants
 
-- Supported targets are x86/64, x86_64/musl: OpenWrt 23.05 and 24.10 use native IPK/opkg; 25.12 uses APK 3/apk. Do not mix SDKs, ABIs, or package managers across releases.
-- Select a series with `--profile` on `build.sh`, or `OPENWRT_PROFILE` for other tools. The default stays 25.12. Read effective values through `load_config()` or its CLI, not duplicated literals.
+- Supported targets are x86/64 (x86_64), armsr/armv8 and rockchip/armv8 (aarch64_generic), mediatek/filogic (aarch64_cortex-a53), all musl: OpenWrt 23.05 and 24.10 use native IPK/opkg; 25.12 uses APK 3/apk. Do not mix SDKs, ABIs, or package managers across releases.
+- Select a series with `--profile` on `build.sh`, or `OPENWRT_PROFILE` for other tools. Select hardware with `--target` or `OPENWRT_TARGET`; command-line selection wins. Defaults stay 25.12 and x86/64. Read effective values through `load_config()` or its CLI, not duplicated literals.
 - Upstream configuration consists only of `UPSTREAM_REPOSITORY` and a full `UPSTREAM_COMMIT`. Derive version, source hash, tree, and `SOURCE_DATE_EPOCH` from verified Git objects. Do not add hand-maintained upstream version/hash fields.
 - Never weaken SDK checksum, GPG signature/fingerprint, Git object, APK signature, or IPK bundle verification to make a build pass.
-- Keep SDK caches/release paths isolated. A frozen `build-config.json` must ignore the current profile environment. Reuse downloads only after validation; failed downloads must not replace valid cached inputs.
+- Keep SDK caches/release paths isolated. A frozen `build-config.json` must ignore both profile and target selectors. Reuse downloads only after validation; failed downloads must not replace valid cached inputs.
 - Use the SDK host-tool PATH when packaging IPKs: its fakeroot must pair with SDK tar/stat, since newer host statx APIs can bypass older fakeroot interception. Release assembly rejects host UID/GID leakage.
 - Preserve deterministic archives/build timestamps. APK revisions use `-rN`, IPK revisions use `-N`. Keep generated Make settings and the build-environment script in `PKG_FILE_DEPENDS` so changes invalidate package stamps.
 - Support ordinary Linux Docker Engine and macOS Docker implementations. Respect Docker context/`DOCKER_HOST`; avoid OrbStack commands, privileged containers, host-only tools, or assumptions that the host UID is 1000. Host utilities should work on both macOS and Linux.
@@ -64,7 +64,7 @@ docker run --rm --platform linux/amd64 --user "$(id -u):$(id -g)" \
 
 A root caller must also pass `-e FORCE=1` for OpenWrt make inside the disposable container. Never run SDK compilation directly on a production router.
 
-Native IPK end-to-end tests install dependencies from official feeds and mutate/remove application packages **only in the dedicated guest**. They have no configurable remote target and verify the QEMU model/release/package manager first:
+Native IPK end-to-end tests install dependencies from official feeds and mutate/remove application packages **only in the dedicated guest**. They have no configurable remote target and verify the virtual model, release, target, ABI and package manager first (ARM virt reports `linux,dummy-virt`):
 
 ```sh
 OPENWRT_PROFILE=23.05 ./scripts/vm.sh reset
@@ -75,3 +75,11 @@ OPENWRT_PROFILE=23.05 python3 tests/ipk_integration.py
 For 25 use the existing `tests/integration.py`, `tests/faults.py`, and `tests/upgrade.py` against a matching prepared guest; consult their setup and historical validation notes. Resetting the VM destroys its test data. Do not run guest integration suites concurrently: they share ports and one guest disk.
 
 Report which profiles were actually built/tested and which remain unverified. Do not promote source/API inspection into an end-to-end verification claim. Update both READMEs when commands, support, package formats, or user-visible behavior change. Preserve historical validation records; add fresh evidence separately.
+
+## ARM64 verification boundaries
+
+Use `sdk_layout.py` to query SDK build/toolchain paths. Package architecture names are not ELF loader names: ARM64 uses `/lib/ld-musl-aarch64.so.1`. Preserve ELF64/little-endian/PIE/RELRO/NX checks for all three programs. `user-mode-test.py` runs matching SDK libraries through explicit qemu-aarch64; no privileged container or binfmt registration is needed.
+
+Full-system ARM tests use only the pinned ARMsr kernel/rootfs and QEMU virt. Their per-release disk/SSH paths come from `VM_PATH`. Tests are serial because ports/container names are shared. Filogic APKs/IPKs must not be force-installed in an aarch64_generic guest. Rockchip package installation in an ABI-matching ARMsr guest is simulator compatibility evidence, never board validation. New APK transactions require exact release/target/architecture; old target-less manifests are x86-only. Read actual rollback APK metadata before selecting it, even if filenames match.
+
+Update both READMEs, compatibility evidence and this guide for changes to this matrix. Do not touch the production gateway for ARM validation.

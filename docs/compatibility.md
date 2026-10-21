@@ -2,7 +2,7 @@
 
 [English README](../README.md) · [中文说明](../README.zh.md)
 
-The supported integration targets are **x86/64, x86_64, musl**. OpenWrt 23.05/24.10 use opkg and native IPK; OpenWrt 25.12 switched to APK. A single APK built with the 25 SDK is not a supported installation method on 23/24. The distinction is reflected in SDK selection, source packaging revision, native package assembly, verification, and installation instructions.
+Configured targets are **x86/64**, **armsr/armv8**, **mediatek/filogic**, and **rockchip/armv8**, using musl. ARM64 validation is recorded separately below. OpenWrt 23.05/24.10 use opkg and native IPK; OpenWrt 25.12 switched to APK. A single APK built with the 25 SDK is not a supported installation method on 23/24. The distinction is reflected in SDK selection, source packaging revision, native package assembly, verification, and installation instructions.
 
 ## Pinned targets
 
@@ -14,7 +14,7 @@ All fixed values live in `config/build.json`; this table describes the current d
 | `24.10` | 24.10.6 | 13.3.0 / zstd | IPK, revision `-N` | `dist/release-24.10.6-x86_64/` |
 | `25.12` (default) | 25.12.1 | 14.3.0 / zstd | APK 3, revision `-rN` | `dist/release/` |
 
-OpenWrt uses series names 23.05, 24.10, and 25.12, rather than a universal major-version ABI. To target another patch release, update the corresponding SDK/version/checksum/image pins together and validate against that exact image. Runtime APIs are shared by the three supported series, but this is not a claim that every patch release or downstream firmware has been tested. Versions older than 23.05 and non-x86_64 architectures are outside the current support scope. Compatibility with a legacy series does not extend upstream security maintenance.
+OpenWrt uses series names 23.05, 24.10, and 25.12, rather than a universal major-version ABI. To target another patch release, update the corresponding SDK/version/checksum/image pins together and validate against that exact image. Runtime APIs are shared by the three supported series, but this is not a claim that every patch release or downstream firmware has been tested. Versions older than 23.05, ARMv7 and ARM64 targets outside the listed matrix are outside this phase. Compatibility with a legacy series does not extend upstream security maintenance.
 
 The public source and release metadata used to establish this matrix are:
 
@@ -74,3 +74,35 @@ All **38 unit tests** passed directly under the Ubuntu host's Python 3.10, and S
 Linux generated an independent test signing key; the production private key was not transferred. Generated Linux releases and logs were copied back under `dist/linux-validation/`, separately from the existing release directories. Local evidence includes `results.json`, `cross-host.json`, `source-files.json`, per-profile build/verification/reproducibility logs, `verification/`, and `releases/<version>/`. These generated artifacts are not committed.
 
 This Linux run validates Docker builds, packaging, artifact verification and reproducibility. The guest runtime, LuCI browser and deployment-recovery results remain those recorded in the preceding validation section.
+
+## ARM64 validation
+
+The ARM64 implementation adds three SDK targets across all three pinned releases (nine combinations). ARMsr/Rockchip use `aarch64_generic`; Filogic uses `aarch64_cortex-a53`. Downloads, extracted SDKs, releases and reports are isolated by exact version plus target. x86 defaults and paths remain unchanged. Manual CI includes all twelve combinations.
+
+The validation layers are independent: native package build/signature/ELF verification; clean rebuild reproducibility; explicit QEMU user mode with matching SDK loader/libraries/CPU; full ARMsr guest integration; ABI-compatible Rockchip package installation in ARMsr. Filogic full-system and physical-board validation are not claimed. No physical ARM device or production gateway is used.
+
+### Build verification (2026-10-22)
+
+Ubuntu 22.04.5 with ordinary Docker Engine built and verified all **12/12** release/target combinations. Each produced four native packages. All SDK signature/fingerprint/checksum checks, release signatures, ELF class/machine/endianness/interpreter and hardening checks passed. All seven reproducibility inputs per combination matched: **84/84** binaries and unsigned packages. The **nine ARM64** combinations also passed explicit QEMU user-mode v4/v5/v6 communication and timeout-helper tests, using matching SDK libraries and Cortex-A53 or Cortex-A57 CPU models.
+
+ARM64 releases are available locally at `dist/release-<version>-<target>-<subtarget>/`; the three x86 outputs retain their previous paths. The remote validation workspace uses its independent test signing key. No private key was copied back. These are validation builds; retain and authenticate the corresponding public key when using an artifact, or rebuild with your own signing key.
+
+Detailed evidence is under `dist/arm64-validation/`: `artifacts.json`, `browser.json`, screenshots, and `linux-dist/arm64-validation/matrix.json` with per-step logs. The nested Linux directory also contains target-specific ELF, reproducibility, user-mode and guest reports. These generated files are ignored by Git. Earlier verification records above refer only to their original x86 builds.
+
+### Runtime verification
+
+The 25.12.1 ARMsr guest passed all seven native installation/LuCI/service groups and all ten transaction groups, including stale-plan rejection, automatic and manual rollback. A synthetic previous revision verified failed-upgrade restoration of exact old packages and custom port/worker/timeout settings, followed by a successful upgrade. Inventory collection and router preflight/drift checks include the same package architecture field.
+
+Rockchip 25.12.1 packages passed all seven native groups in the matching ARMsr guest, using ordinary APK installation without forced architectures. Browser checks on 25.12.1 confirmed English/Chinese rendering, Save & Apply persisting UCI changes while the service remained running, and successful v6 diagnostics.
+
+| Exact release | ARMsr native integration | Rockchip packages in matching ARMsr | Actual LuCI browser |
+| --- | --- | --- | --- |
+| 23.05.6 | 7/7 groups passed | 7/7 groups passed, native opkg | English/Chinese and Save & Apply passed |
+| 24.10.6 | 7/7 groups passed | 7/7 groups passed, native opkg | English/Chinese and Save & Apply passed |
+| 25.12.1 | 7/7 native + 10/10 transaction groups passed | 7/7 groups passed, native APK | English/Chinese, Save & Apply and v6 diagnostic passed |
+
+Each native suite verifies disabled installation defaults, explicit enablement, non-root execution, v4/v5/v6 diagnostics, controls/logs/validation, authenticated HTTP RPC/UCI ACLs, translation assets, DNS publish/revoke, cold-boot autostart within the separate 120-second guest budget, and configuration-preserving uninstall. Browser checks for 23/24 used reinstalled Rockchip packages in the matching ARMsr guest after both native suites had completed.
+
+**47 unit tests** pass on macOS and Ubuntu's Python 3.10; JavaScript syntax and ShellCheck error checks pass. No Filogic full-system or physical-board results are claimed. Test guests are stopped after validation; the production gateway remains untouched.
+
+The final x86/64 25.12.1 regression also passed all ten transaction groups with the architecture-aware inventory/preflight/recovery logic. All three x86 SDK builds and seven-file rebuild comparisons passed in the twelve-combination matrix. Final machine-readable totals are in `dist/arm64-validation/summary.json`; the matching source file hashes are in `source-files.json`.

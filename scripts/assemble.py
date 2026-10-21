@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import tarfile
 from pathlib import Path
-from build_config import load_config, STRING_KEYS, INTEGER_KEYS
+from build_config import load_config, STRING_KEYS, INTEGER_KEYS, OPTIONAL_KEYS
 import ipk
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -89,7 +89,7 @@ def main():
         (OUT / 'LICENSE.vlmcsd').write_bytes(source_archive.extractfile(member).read())
     shutil.copy2(ROOT / 'LICENSE', OUT / 'LICENSE.integration')
     snapshot = {key: int(config[key]) if key in INTEGER_KEYS else config[key]
-                for key in STRING_KEYS | INTEGER_KEYS}
+                for key in STRING_KEYS | INTEGER_KEYS | (OPTIONAL_KEYS & config.keys())}
     snapshot.update(UPSTREAM_VERSION=config['UPSTREAM_VERSION'], UPSTREAM_SHA256=config['UPSTREAM_SHA256'],
                     SOURCE_DATE_EPOCH=int(config['SOURCE_DATE_EPOCH']))
     (OUT / 'build-config.json').write_text(json.dumps(snapshot, indent=2, sort_keys=True) + '\n')
@@ -98,7 +98,8 @@ def main():
         shutil.copy2(ROOT / config['SDK_METADATA_PATH'] / 'builder-image.txt', OUT / 'builder-image.txt')
     files = [{'file': p.name, 'sha256': hashlib.sha256(p.read_bytes()).hexdigest(), 'size': p.stat().st_size}
              for p in sorted(OUT.iterdir()) if p.is_file() and p.name not in {'release.json', 'SHA256SUMS'}]
-    manifest = {'schema': 1, 'package_format': config['PACKAGE_FORMAT'], 'package_manager': config['PACKAGE_MANAGER'], 'openwrt': config['OPENWRT_VERSION'], 'arch': config['OPENWRT_ARCH'], 'source': config['UPSTREAM_URL'],
+    manifest = {'schema': 1, 'package_format': config['PACKAGE_FORMAT'], 'package_manager': config['PACKAGE_MANAGER'], 'openwrt': config['OPENWRT_VERSION'], 'arch': config['OPENWRT_ARCH'], 'target': config['OPENWRT_TARGET'],
+                'elf_machine': config['ELF_MACHINE'], 'elf_interpreter': config['ELF_INTERPRETER'], 'source': config['UPSTREAM_URL'],
                 'commit': config['UPSTREAM_COMMIT'], 'source_date_epoch': int(config['SOURCE_DATE_EPOCH']),
                 'sdk_sha256': config['SDK_SHA256'], 'upstream_sha256': config['UPSTREAM_SHA256'],
                 'upstream_version': config['UPSTREAM_VERSION'], 'upstream_tree': config['UPSTREAM_TREE'],

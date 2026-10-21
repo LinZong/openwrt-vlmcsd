@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Native IPK and full LuCI integration against the fixed disposable QEMU guest."""
+"""Native IPK/APK and full LuCI integration against the fixed disposable QEMU guest."""
 import hashlib
 import io
 import json
@@ -15,8 +15,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from build_config import load_config
 
+CONFIG = load_config(require_upstream=True)
+VM = ROOT / CONFIG['VM_PATH']
+
 SSH = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=3', '-o', 'StrictHostKeyChecking=accept-new',
-       '-o', f'UserKnownHostsFile={ROOT}/.cache/vm_known_hosts', '-i', f'{ROOT}/.cache/vm_id',
+       '-o', f'UserKnownHostsFile={VM}/vm_known_hosts', '-i', f'{VM}/vm_id',
        '-p', '22222', 'root@127.0.0.1']
 RESULTS = []
 
@@ -56,16 +59,19 @@ def main(config):
             if time.monotonic() >= deadline:
                 raise
             time.sleep(1)
-    assert 'QEMU' in board['model'], 'Refusing a non-QEMU device'
+    assert ('QEMU' in board['model'] or (board['model'] == 'linux,dummy-virt' and board['release']['target'] == 'armsr/armv8')), 'Refusing a non-QEMU device'
     assert board['release']['version'] == config['OPENWRT_VERSION'], board
-    assert config['PACKAGE_FORMAT'] == 'ipk', 'Select OPENWRT_PROFILE=23.05 or 24.10'
-    assert ssh('command -v opkg').strip() == '/bin/opkg'
+    fmt = config['PACKAGE_FORMAT']
+    assert board['release']['target'] == ('armsr/armv8' if config['OPENWRT_TARGET'] == 'rockchip/armv8' else config['OPENWRT_TARGET'])
+    assert ssh(". /etc/openwrt_release; echo $DISTRIB_ARCH").strip() == config['OPENWRT_ARCH']
+    assert ssh('command -v ' + config['PACKAGE_MANAGER']).strip() in {'/bin/' + config['PACKAGE_MANAGER'], '/usr/bin/' + config['PACKAGE_MANAGER']}
     release = ROOT / config['RELEASE_PATH']
     manifest = json.loads((release / 'release.json').read_text())
-    assert manifest['openwrt'] == board['release']['version'] and manifest['package_format'] == 'ipk'
+    assert manifest['openwrt'] == board['release']['version'] and manifest['package_format'] == fmt
     for entry in manifest['files']:
         assert hashlib.sha256((release / entry['file']).read_bytes()).hexdigest() == entry['sha256']
-    subprocess.check_call(['openssl', 'dgst', '-sha256', '-verify', str(release / 'vlmcsd.pem'),
+    if fmt == 'ipk':
+        subprocess.check_call(['openssl', 'dgst', '-sha256', '-verify', str(release / 'vlmcsd.pem'),
                            '-signature', str(release / 'SHA256SUMS.sig'), str(release / 'SHA256SUMS')])
 
     def install():
@@ -74,14 +80,19 @@ def main(config):
             for package in manifest['packages']:
                 archive.add(release / package['file'], arcname=package['file'])
         ssh('mkdir -p /tmp/vlmcsd-ipk; tar -xzf - -C /tmp/vlmcsd-ipk', data=buffer.getvalue())
-        log = ssh('opkg update && opkg install /tmp/vlmcsd-ipk/*.ipk', timeout=120)
-        (ROOT / 'dist' / ('ipk-install-' + config['OPENWRT_VERSION'] + '.log')).write_text(log)
+        if fmt == 'ipk':
+            command = 'opkg update && opkg install /tmp/vlmcsd-ipk/*.ipk'
+        else:
+            ssh('cat > /etc/apk/keys/vlmcsd.pem', data=(release / 'vlmcsd.pem').read_bytes())
+            command = 'apk update && apk add /tmp/vlmcsd-ipk/*.apk'
+        log = ssh(command, timeout=120)
+        (ROOT / 'dist' / ('ipk-install-' + config['REPORT_SUFFIX'] + '.log')).write_text(log)
         ssh('/etc/init.d/rpcd restart')
         time.sleep(1)
         assert not rpc('status')['running'], 'Fresh packages should default to disabled'
         ssh('uci set vlmcsd.main.enabled=1; uci commit vlmcsd; /etc/init.d/vlmcsd enable; /etc/init.d/vlmcsd start')
         return wait_running()
-    check('native opkg install, disabled default and explicit enable', install)
+    check('native package install, disabled default and explicit enable', install)
 
     def service():
         s = wait_running()
@@ -180,7 +191,7 @@ def main(config):
 
     def uninstall():
         before = ssh('sha256sum /etc/config/vlmcsd').split()[0]
-        ssh('/etc/init.d/vlmcsd stop; /etc/init.d/vlmcsd disable; opkg remove luci-i18n-vlmcsd-zh-cn luci-app-vlmcsd vlmcs vlmcsd; /etc/init.d/rpcd restart')
+        ssh('/etc/init.d/vlmcsd stop; /etc/init.d/vlmcsd disable; ' + ('opkg remove' if fmt == 'ipk' else 'apk del') + ' luci-i18n-vlmcsd-zh-cn luci-app-vlmcsd vlmcs vlmcsd; /etc/init.d/rpcd restart')
         assert ssh('sha256sum /etc/config/vlmcsd').split()[0] == before
         assert ssh('test ! -x /usr/sbin/vlmcsd && echo removed').strip() == 'removed'
         assert not ssh('uci -q show dhcp.vlmcsd_srv || true').strip()
@@ -190,7 +201,7 @@ def main(config):
 
 if __name__ == '__main__':
     config = load_config(require_upstream=True)
-    report = ROOT / 'dist' / ('ipk-integration-' + config['OPENWRT_VERSION'] + '.json')
+    report = ROOT / 'dist' / ('ipk-integration-' + config['REPORT_SUFFIX'] + '.json')
     report.parent.mkdir(parents=True, exist_ok=True)
     try:
         board = main(config)

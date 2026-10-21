@@ -13,12 +13,14 @@ import time
 import uuid
 from pathlib import Path
 
+from build_config import load_config
+
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / 'scripts'
 APP_NAMES = {'vlmcsd', 'vlmcs', 'luci-app-vlmcsd', 'luci-i18n-vlmcsd-zh-cn'}
 REMOTE = '/root/vlmcsd-deploy'
 PAYLOAD_SCRIPTS = ['engine.sh', 'snapshot.sh', 'check-removals.sh']
-REVIEW_SCRIPTS = PAYLOAD_SCRIPTS + ['manage.py', 'deploy.sh', 'uninstall.sh']
+REVIEW_SCRIPTS = PAYLOAD_SCRIPTS + ['manage.py', 'build_config.py', 'deploy.sh', 'uninstall.sh']
 
 
 def digest(data):
@@ -74,6 +76,12 @@ def baseline_check(s, manifest):
     b = s['board']
     if b['DISTRIB_RELEASE'] != manifest['openwrt'] or b['DISTRIB_ARCH'] != manifest['arch']:
         raise ValueError(f"This release requires OpenWrt {manifest['openwrt']} {manifest['arch']}")
+    target = manifest.get('target')
+    if target:
+        if b.get('DISTRIB_TARGET') != target:
+            raise ValueError('This release requires OpenWrt target ' + target)
+    elif manifest['arch'] != 'x86_64' or b.get('DISTRIB_TARGET', 'x86/64') != 'x86/64':
+        raise ValueError('Legacy release manifests support only x86/64')
     if s['pending'].strip():
         raise ValueError('Commit or revert pending UCI changes before planning')
     if int(s['available_kib']) < 16384:
@@ -83,7 +91,15 @@ def baseline_check(s, manifest):
         raise ValueError('TCP 1688 is occupied by another process')
 
 
-def old_artifacts(names, s, release, manifest, cache):
+def apk_metadata(path, args):
+    # adbdump reads stdin without installing, running scripts or creating target files.
+    info = json.loads(ssh(args, 'apk adbdump --format json /dev/stdin', Path(path).read_bytes()))
+    if isinstance(info, list):
+        info = info[0]
+    return info.get('info', info)
+
+
+def old_artifacts(names, s, release, manifest, cache, args=None):
     """Never claim rollback is available without exact prior package bytes."""
     result = []
     candidates = list(release.glob('*.apk')) + list(Path(cache).resolve().glob('*.apk'))
@@ -95,7 +111,23 @@ def old_artifacts(names, s, release, manifest, cache):
         matches = [p for p in candidates if p.name == filename]
         if not matches:
             raise ValueError(f'Missing exact rollback package {filename}; place it in {cache}')
-        p = matches[0]
+        expected_arch = s['installed'][name].get('arch')
+        allowed_arches = {manifest['arch'], 'noarch'}
+        if name in {'vlmcsd', 'vlmcs'}:
+            allowed_arches = {manifest['arch']}
+        elif name in APP_NAMES:
+            allowed_arches = {'noarch'}
+        if expected_arch:
+            allowed_arches &= {expected_arch}
+        valid = []
+        for candidate in matches:
+            info = apk_metadata(candidate, args)
+            if ((info.get('name'), info.get('version')) == (name, version)
+                    and info.get('arch') in allowed_arches):
+                valid.append(candidate)
+        if not valid:
+            raise ValueError('Rollback package name/version/architecture mismatch: ' + filename)
+        p = valid[0]
         result.append({'file': str(p), 'name': name, 'version': version, 'sha256': digest(p.read_bytes())})
     return result
 
@@ -137,7 +169,7 @@ def make_plan(args):
         if not remove:
             raise ValueError('Application is not installed')
         changed = set(remove)
-    old = old_artifacts(changed, s, release, manifest, args.rollback_dir)
+    old = old_artifacts(changed, s, release, manifest, args.rollback_dir, args=args)
     settings = s.get('settings', {})
     dns = int(args.dns) if args.dns is not None else int(settings.get('dns') or 0)
     desired = {'enabled': '1', 'interface': settings.get('interface') or 'lan', 'port': settings.get('port') or '1688', 'dns': str(dns)}
@@ -281,7 +313,7 @@ def main():
     parser.add_argument('--port', default=22, type=int)
     parser.add_argument('--identity')
     parser.add_argument('--known-hosts')
-    parser.add_argument('--release', default=str(ROOT / 'dist' / 'release'))
+    parser.add_argument('--release', help='Release directory (defaults to the selected build profile/target)')
     parser.add_argument('--rollback-dir', default=str(ROOT / 'dist' / 'rollback-package-cache'))
     parser.add_argument('--output')
     parser.add_argument('--plan')
@@ -291,6 +323,8 @@ def main():
     dns_options.add_argument('--no-dns', dest='dns', action='store_false')
     parser.add_argument('--purge', action='store_true')
     args = parser.parse_args()
+    if args.release is None and args.command == 'plan':
+        args.release = str(ROOT / load_config()['RELEASE_PATH'])
     if args.command == 'plan':
         make_plan(args)
     elif args.command == 'apply':

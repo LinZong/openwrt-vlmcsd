@@ -18,14 +18,68 @@
       "OPENWRT_VERSION": "23.05.6",
       "SDK_GCC_VERSION": "12.3.0",
       "SDK_SHA256": "f22bdac5b702bb823a0ee802e9bbda2a56c0f7a2687e5090113b00910dac995f",
-      "VM_IMAGE_SHA256": "c6e22b6f58ba721f15f3ccdbc26d4a85da64b7e3c564cd5bc70676eb91eeec51"
+      "VM_IMAGE_SHA256": "c6e22b6f58ba721f15f3ccdbc26d4a85da64b7e3c564cd5bc70676eb91eeec51",
+      "TARGETS": {
+        "armsr/armv8": {
+          "SDK_SHA256": "0b8e27de3c4ec90a1155d0ee5f4a7622b2d90f4efced59b346b10ddfdb396fe6",
+          "VM_IMAGE_SHA256": "b5ed1ac919e4096ef7e688734a9f7cfba38ea2b3c6e6a8fc37303c383b7eea18",
+          "VM_KERNEL_SHA256": "243159d98fa1b42db9c0b3182386528e3041c41c40066b083f2c1099eca9b358"
+        },
+        "mediatek/filogic": {
+          "SDK_SHA256": "5a3867d65489f76b8233381489d8a55cae707cc448a32816db91fc118cb41281"
+        },
+        "rockchip/armv8": {
+          "SDK_SHA256": "e8fe198a72c86cfab34a5428fb6560ffdee5bcd5a72319f39cb9d3585ecd13d4"
+        }
+      }
     },
     "24.10": {
       "OPENWRT_VERSION": "24.10.6",
       "SDK_GCC_VERSION": "13.3.0",
       "SDK_SHA256": "9e398ea7efc098e4a986f97efff595e32d08c615fe356bcb3d885d7ad3a39ac0",
-      "VM_IMAGE_SHA256": "23dc6904ede514e37e9938604c9951a0601c375efdaf093c0d191d12e463f9b2"
+      "VM_IMAGE_SHA256": "23dc6904ede514e37e9938604c9951a0601c375efdaf093c0d191d12e463f9b2",
+      "TARGETS": {
+        "armsr/armv8": {
+          "SDK_SHA256": "d2425a383155d6af6a8299fb4b483613a64c145ff0d30173c411cf666602dc9a",
+          "VM_IMAGE_SHA256": "44d70e5b2e89d7b96e93dd6f093bf735928e803c0c2a62ff27b15cdedd8e8032",
+          "VM_KERNEL_SHA256": "f10546c21cf2b5a577edc4a779b7fc4298336fb213e9dd3d466b8ec114a6433f"
+        },
+        "mediatek/filogic": {
+          "SDK_SHA256": "bf9821b98fe810e2cc3ab53b8faa13bc919b9d98d703cba5e53906c17bd23864"
+        },
+        "rockchip/armv8": {
+          "SDK_SHA256": "5777901cd7fb62609285845752a5ebd9aa7fcda20778c8dd6000a710f57356fd"
+        }
+      }
     },
-    "25.12": {}
+    "25.12": {
+      "TARGETS": {
+        "armsr/armv8": {
+          "SDK_SHA256": "7107f74bf57c01be092ea4d952d3f6fac6eae1da97bdc564280b890488820b3d",
+          "VM_IMAGE_SHA256": "ac9720502c5549755ff4a950f0675557be04754141d8bd395325427f5c5b2388",
+          "VM_KERNEL_SHA256": "7af9c7aa3a98dc01d8b514f0819bfa85bc4f6c754df8cb843e35d347d96dae08"
+        },
+        "mediatek/filogic": {
+          "SDK_SHA256": "f3e73115e7d6479c636cee03c2f46b7f17cf7df10cc9329438214914fc8f02c8"
+        },
+        "rockchip/armv8": {
+          "SDK_SHA256": "5da51c4cd9752d8bf22a3a49492d1224c45bb6f27034607ab4a48bf21e80fa02"
+        }
+      }
+    }
+  },
+  "OPENWRT_TARGETS": {
+    "x86/64": {
+      "OPENWRT_ARCH": "x86_64"
+    },
+    "armsr/armv8": {
+      "OPENWRT_ARCH": "aarch64_generic"
+    },
+    "mediatek/filogic": {
+      "OPENWRT_ARCH": "aarch64_cortex-a53"
+    },
+    "rockchip/armv8": {
+      "OPENWRT_ARCH": "aarch64_generic"
+    }
   }
 }

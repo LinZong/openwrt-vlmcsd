@@ -7,15 +7,17 @@ from pathlib import Path
 import integration as test
 
 ROOT = test.ROOT
-OLD = ROOT / 'dist/test-old-release'
+OLD = ROOT / ('dist/test-old-release-' + test.CONFIG['REPORT_SUFFIX'])
 
 
 def main():
     old_manifest = json.loads((OLD / 'release.json').read_text())
-    new_manifest = json.loads((ROOT / 'dist/release/release.json').read_text())
+    new_manifest = json.loads((test.RELEASE / 'release.json').read_text())
     old_version = next(p['version'] for p in old_manifest['packages'] if p['name'] == 'vlmcsd')
     new_version = next(p['version'] for p in new_manifest['packages'] if p['name'] == 'vlmcsd')
-    assert 'QEMU' in json.loads(test.ssh('ubus call system board'))['model']
+    board = json.loads(test.ssh('ubus call system board'))
+    assert ('QEMU' in board['model'] or (board['model'] == 'linux,dummy-virt' and board['release']['target'] == 'armsr/armv8'))
+    assert board['release']['target'] == test.CONFIG['OPENWRT_TARGET']
     installed = json.loads(test.ssh('apk query --from installed --format json --fields name,version "*"'))
     if any(p['name'] == 'vlmcsd' for p in installed):
         test.plan_apply('uninstall')
@@ -41,7 +43,7 @@ def main():
         assert status['running'] and status['port'] == 1689 and status['version'] == old_version, status
         assert all(endpoint.endswith(':1689') for endpoint in status['listeners']), status
         report = {'ok': True, 'test': 'failed upgrade restores exact previous packages and custom configuration', 'transaction': txid, 'seconds': round(time.monotonic() - started, 2)}
-        (ROOT / 'dist/upgrade-results.json').write_text(json.dumps(report, indent=2) + '\n')
+        (ROOT / ('dist/upgrade-results-' + test.CONFIG['REPORT_SUFFIX'] + '.json')).write_text(json.dumps(report, indent=2) + '\n')
         print(json.dumps(report), flush=True)
     finally:
         test.ssh('nft delete table inet vlmcsd_test 2>/dev/null || true')

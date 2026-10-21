@@ -18,7 +18,7 @@ setting() { jsonfilter -i "$HERE/request.json" -e "@.$1"; }
 # A deployment-wide flock and APK's own lock serialize mutations.
 lock() { mkdir -p "$ROOT"; exec 9>"$ROOT/lock"; flock -n 9; }
 record_hashes() {
- apk query --from installed --format json --fields name,version,depends '*' > "$HERE/after-packages"
+ apk query --from installed --format json --fields name,version,arch,depends '*' > "$HERE/after-packages"
  : > "$HERE/after-hashes"
  for f in /etc/config/vlmcsd /etc/config/luci /etc/config/dhcp /etc/apk/world; do
   if [ -f "$f" ]; then sha256sum "$f" >> "$HERE/after-hashes"; else printf 'absent  %s\n' "$f" >> "$HERE/after-hashes"; fi
@@ -64,7 +64,7 @@ apk_local() {
 }
 check_drift() {
  if [ -s "$HERE/after-packages" ]; then
-  apk query --from installed --format json --fields name,version,depends '*' > "$HERE/rollback-current-packages"
+  apk query --from installed --format json --fields name,version,arch,depends '*' > "$HERE/rollback-current-packages"
   cmp "$HERE/after-packages" "$HERE/rollback-current-packages" || { event conflict 'Installed package state changed concurrently'; return 1; }
  fi
  [ ! -s "$HERE/after-hashes" ] || {
@@ -194,7 +194,7 @@ apply_body() {
 preflight() {
  sha256sum -c "$HERE/expected-hashes"
  while IFS= read -r f; do [ -z "$f" ] || [ ! -e "$f" ]; done < "$HERE/expected-absent"
- current=$(apk query --from installed --format json --fields name,version,depends '*' 2>/dev/null)
+ current=$(apk query --from installed --format json --fields name,version,arch,depends '*' 2>/dev/null)
  printf '%s' "$current" > "$HERE/current-packages"
  cmp "$HERE/expected-packages" "$HERE/current-packages"
  [ -z "$(uci changes)" ]

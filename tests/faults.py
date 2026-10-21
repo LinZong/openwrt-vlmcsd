@@ -26,15 +26,17 @@ def until(fn, seconds=30):
 
 def fault(mode):
     board = json.loads(test.ssh('ubus call system board'))
-    assert 'QEMU' in board['model']
+    assert ('QEMU' in board['model'] or (board['model'] == 'linux,dummy-virt' and board['release']['target'] == 'armsr/armv8'))
+    assert board['release']['version'] == test.CONFIG['OPENWRT_VERSION']
+    assert board['release']['target'] == test.CONFIG['OPENWRT_TARGET']
     installed = test.ssh('apk query --from installed --format json --fields name,version "*"')
     if any(p['name'] == 'vlmcsd' for p in json.loads(installed)):
         test.plan_apply('uninstall')
     baseline = json.loads(test.ssh('apk query --from installed --format json --fields name,version "*"'))
     test.ssh("nft add table inet vlmcsd_test; nft 'add chain inet vlmcsd_test output { type filter hook output priority -100; policy accept; }'; nft add rule inet vlmcsd_test output ip daddr 127.0.0.1 tcp dport 1688 drop")
-    plan = ROOT / 'dist' / f'fault-{mode}.json'
+    plan = ROOT / 'dist' / f"fault-{test.CONFIG['REPORT_SUFFIX']}-{mode}.json"
     test.cli('deploy', 'plan', '--output', str(plan))
-    logpath = ROOT / '.cache' / f'fault-{mode}.log'
+    logpath = test.VM / f'fault-{mode}.log'
     started = time.monotonic()
     with logpath.open('w') as output:
         proc = subprocess.Popen([sys.executable, str(ROOT / 'scripts/manage.py'), 'deploy', 'apply', *test.COMMON, '--plan', str(plan)], stdout=output, stderr=subprocess.STDOUT)
@@ -70,7 +72,7 @@ def fault(mode):
             assert actual == baseline, 'Package versions did not return to the exact baseline'
             assert not test.ssh('test -x /usr/sbin/vlmcsd && echo installed || true').strip()
             events = test.ssh(f'cat {remote}/events.jsonl')
-            (ROOT / 'dist' / f'fault-{mode}-events.jsonl').write_text(events)
+            (ROOT / 'dist' / f"fault-{test.CONFIG['REPORT_SUFFIX']}-{mode}-events.jsonl").write_text(events)
             result = {'fault': mode, 'ok': True, 'seconds': round(time.monotonic() - started, 2), 'transaction': tx}
             REPORT.append(result)
             print(json.dumps(result), flush=True)
@@ -88,4 +90,4 @@ if __name__ == '__main__':
         for mode in ['executor-killed', 'deadline', 'reboot']:
             fault(mode)
     finally:
-        (ROOT / 'dist' / 'fault-results.json').write_text(json.dumps(REPORT, indent=2) + '\n')
+        (ROOT / 'dist' / ('fault-results-' + test.CONFIG['REPORT_SUFFIX'] + '.json')).write_text(json.dumps(REPORT, indent=2) + '\n')
