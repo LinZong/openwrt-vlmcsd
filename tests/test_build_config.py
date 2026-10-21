@@ -46,14 +46,15 @@ class BuildConfiguration(unittest.TestCase):
             (self.root / name).touch()
         (self.root / 'vlmcsd-build.mk').write_text(config_module.render(config, 'make'))
         probe = self.root / 'probe.mk'
-        probe.write_text("probe:\n\t@printf '%s\\n' '$(PKG_VERSION)-r$(PKG_RELEASE)' '$(PKG_SOURCE_VERSION)' '$(PKG_HASH)' '$(MAKE_FLAGS)' '$(PKG_PO_VERSION)' '$(SOURCE_DATE_EPOCH)'\n")
+        probe.write_text("probe:\n\t@printf '%s\\n' '$(PKG_VERSION)-r$(PKG_RELEASE)' '$(PKG_SOURCE_VERSION)' '$(PKG_HASH)' '$(MAKE_FLAGS)' '$(PKG_PO_VERSION)' '$(SOURCE_DATE_EPOCH)' '$(PKG_FILE_DEPENDS)'\n")
         for package in ['vlmcsd', 'luci-app-vlmcsd']:
             with self.subTest(package=package):
                 output = subprocess.check_output([
                     'make', '--no-print-directory', '-f', str(ROOT / 'package' / package / 'Makefile'),
                     '-f', str(probe), f'TOPDIR={self.root}', f'INCLUDE_DIR={self.root / "include"}', 'probe'], text=True).splitlines()
                 self.assertEqual(output[0], '9999-r7')
-                self.assertEqual(output[-1], '1800000000')
+                self.assertEqual(output[5], '1800000000')
+                self.assertIn(str(self.root / 'vlmcsd-build.mk'), output[6])
                 if package == 'vlmcsd':
                     self.assertEqual(output[1:3], ['a' * 40, 'b' * 64])
                     self.assertIn('9999-openwrt-r7-aaaaaaa', output[3])
@@ -71,6 +72,13 @@ class BuildConfiguration(unittest.TestCase):
                 self.values[key] = value
                 with self.assertRaises(ValueError):
                     self.write()
+
+    def test_hexadecimal_case_does_not_change_downloads_or_key_lookup(self):
+        expected = config_module.load_config()
+        for key in ['SDK_SHA256', 'UPSTREAM_SHA256', 'VM_IMAGE_SHA256',
+                    'UPSTREAM_COMMIT', 'OPENWRT_KEY_FINGERPRINT']:
+            self.values[key] = self.values[key].swapcase()
+        self.assertEqual(self.write(), expected)
 
     def test_sdk_must_match_exact_signed_checksum_entry(self):
         config = self.write()

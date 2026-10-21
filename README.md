@@ -10,6 +10,10 @@
 ./scripts/build.sh
 ```
 
+SDK 和源码压缩包先校验本地 SHA256；官方校验清单、签名和发布公钥先在本地验证签名、指纹及 SDK 条目。验证通过的文件直接复用，缺失、损坏或与配置不匹配时才补充下载。下载失败或验证失败不会覆盖已有文件。Docker 基础依赖继续复用镜像构建缓存，SDK 内部依赖复用其下载缓存。
+
+编译默认使用构建容器可用的 CPU 核数，并考虑 cgroup v2 CPU 配额。可以手动限制并行任务数，例如 `BUILD_JOBS=4 ./scripts/build.sh`；设为 `1` 则串行编译。实际并行度记录在 `.cache/build.log` 开头。`BUILD_JOBS` 是本次运行参数，不写入固定版本配置，也不改变发布版本。
+
 脚本验证官方 SDK 的签名、签名密钥指纹和固定 SHA256，使用 SDK 自带的固定 feeds，构建并签名 APK。第一次准备 SDK 较慢；路由器不参与编译。私钥保存于 `.secrets/`，请备份且勿提交。构建日志位于 `.cache/build.log`。
 
 产物在 `dist/release/`：服务包、客户端、LuCI、中文翻译、离线依赖、公钥、恢复用 timeout、许可证、`release.json` 和 `SHA256SUMS`。`release.json` 记录上游提交、SDK 哈希、feeds、包版本和依赖。相同源码和 SDK 下，时间来自固定 `SOURCE_DATE_EPOCH`，签名后的文件单独校验。

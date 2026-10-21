@@ -3,6 +3,9 @@ set -euo pipefail
 cd /work
 build_env=$(python3 scripts/build_config.py shell)
 eval "$build_env"
+BUILD_JOBS=$(python3 scripts/build_helpers.py jobs)
+export BUILD_JOBS
+printf 'Build parallelism: %s jobs\n' "$BUILD_JOBS"
 export TZ=UTC LC_ALL=C
 python3 scripts/build_config.py make > .cache/sdk/vlmcsd-build.mk
 cd /work/.cache/sdk
@@ -25,7 +28,7 @@ CONFIG_ALL_KMODS=n
 CONFIG_ALL=n
 CONFIG
 make SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" defconfig
-make SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" -j1 package/vlmcsd/compile V=s
-make SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" -j1 package/feeds/luci/luci-base/host/compile V=s
+make SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" -j"$BUILD_JOBS" package/vlmcsd/compile V=s
+make SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" -j"$BUILD_JOBS" package/feeds/luci/luci-base/host/compile V=s
 # This LuCI package contains only files; target runtime dependencies are checked on the target.
-make -r -C package/luci-app-vlmcsd TOPDIR="$PWD" SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" compile V=s
+make -j"$BUILD_JOBS" -r -C package/luci-app-vlmcsd TOPDIR="$PWD" SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" compile V=s

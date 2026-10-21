@@ -8,6 +8,7 @@ PKG_SRC_VERSION:=$(UPSTREAM_VERSION)
 PKG_VERSION:=$(UPSTREAM_VERSION)
 PKG_RELEASE:=$(PACKAGE_RELEASE)
 PKG_LICENSE:=Apache-2.0
+PKG_FILE_DEPENDS += $(TOPDIR)/vlmcsd-build.mk
 include $(TOPDIR)/feeds/luci/luci.mk
 
 # call BuildPackage - OpenWrt buildroot signature

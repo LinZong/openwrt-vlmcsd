@@ -40,6 +40,9 @@ def load_config(path=CONFIG):
     if not re.fullmatch(r'[^@]+@sha256:[a-f0-9]{64}', config['CONTAINER_BASE_IMAGE']):
         raise ValueError('CONTAINER_BASE_IMAGE must pin a SHA-256 digest')
     c = {key: str(value) for key, value in config.items()}
+    for key in ['SDK_SHA256', 'UPSTREAM_SHA256', 'VM_IMAGE_SHA256', 'UPSTREAM_COMMIT']:
+        c[key] = c[key].lower()
+    c['OPENWRT_KEY_FINGERPRINT'] = c['OPENWRT_KEY_FINGERPRINT'].upper()
     target = c['OPENWRT_TARGET'].replace('/', '-')
     c['SDK_URL'] = f"https://downloads.openwrt.org/releases/{c['OPENWRT_VERSION']}/targets/{c['OPENWRT_TARGET']}"
     c['SDK_FILE'] = f"openwrt-sdk-{c['OPENWRT_VERSION']}-{target}_gcc-{c['SDK_GCC_VERSION']}_{c['SDK_LIBC']}.Linux-x86_64.tar.zst"
@@ -70,6 +73,14 @@ def render(config, output):
     return json.dumps(config, sort_keys=True, indent=2) + '\n'
 
 
+def verify_sdk_checksums(config, path):
+    entries = (line.split() for line in Path(path).read_text().splitlines())
+    if not any(fields in ([config['SDK_SHA256'], config['SDK_FILE']],
+                          [config['SDK_SHA256'], '*' + config['SDK_FILE']])
+               for fields in entries):
+        raise ValueError('Configured SDK hash missing from signed checksum list')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('format', choices=['shell', 'make', 'json'])
@@ -78,11 +89,8 @@ def main():
     args = parser.parse_args()
     try:
         config = load_config(args.config)
-        if args.sdk_checksums and not any(
-                fields in ([config['SDK_SHA256'], config['SDK_FILE']],
-                           [config['SDK_SHA256'], '*' + config['SDK_FILE']])
-                for fields in (line.split() for line in args.sdk_checksums.read_text().splitlines())):
-            raise ValueError('Configured SDK hash missing from signed checksum list')
+        if args.sdk_checksums:
+            verify_sdk_checksums(config, args.sdk_checksums)
         print(render(config, args.format), end='')
     except (ValueError, OSError) as exc:
         parser.exit(1, f'Invalid build config: {exc}\n')

@@ -13,6 +13,7 @@ PKG_LICENSE:=LicenseRef-TheFlightSims-OSS AND Apache-2.0
 PKG_LICENSE_FILES:=LICENSE
 PKG_BUILD_PARALLEL:=1
 PKG_ASLR_PIE_REGULAR:=1
+PKG_FILE_DEPENDS += $(TOPDIR)/vlmcsd-build.mk
 
 include $(INCLUDE_DIR)/package.mk
 
