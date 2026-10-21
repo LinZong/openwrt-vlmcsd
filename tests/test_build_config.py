@@ -36,14 +36,14 @@ class BuildConfiguration(unittest.TestCase):
         return config_module.load_config(self.path)
 
     def test_upgrade_propagates_to_shell_and_both_package_makefiles(self):
-        self.values.update(OPENWRT_VERSION='99.1.2', UPSTREAM_COMMIT='a' * 40, PACKAGE_RELEASE=7)
+        self.values.update(OPENWRT_VERSION='25.12.9', UPSTREAM_COMMIT='a' * 40, PACKAGE_RELEASE=7)
         config = self.write()
         result = subprocess.check_output(
             ['bash', '-eu', '-c', config_module.render(config, 'shell') +
              'printf "%s\\n" "$PACKAGE_VERSION" "$VLMCSD_BUILD_VERSION" "$SDK_FILE" "$VM_URL"'], text=True)
         self.assertEqual(result.splitlines()[:2], ['20240101~aaaaaaaaaaaa-r7', '20240101~aaaaaaaaaaaa-openwrt-r7-aaaaaaa'])
-        self.assertIn('openwrt-sdk-99.1.2-', result)
-        self.assertIn('/releases/99.1.2/targets/', result)
+        self.assertIn('openwrt-sdk-25.12.9-', result)
+        self.assertIn('/releases/25.12.9/targets/', result)
         if not shutil.which('make'):
             self.skipTest('make is unavailable')
         (self.root / 'include').mkdir()
@@ -52,7 +52,7 @@ class BuildConfiguration(unittest.TestCase):
             (self.root / name).touch()
         (self.root / 'vlmcsd-build.mk').write_text(config_module.render(config, 'make'))
         probe = self.root / 'probe.mk'
-        probe.write_text("probe:\n\t@printf '%s\\n' '$(PKG_VERSION)-r$(PKG_RELEASE)' '$(PKG_SOURCE_VERSION)' '$(PKG_HASH)' '$(MAKE_FLAGS)' '$(PKG_PO_VERSION)' '$(SOURCE_DATE_EPOCH)' '$(PKG_FILE_DEPENDS)'\n")
+        probe.write_text("probe:\n\t@printf '%s\\n' '$(PACKAGE_VERSION)' '$(PKG_SOURCE_VERSION)' '$(PKG_HASH)' '$(MAKE_FLAGS)' '$(PKG_PO_VERSION)' '$(SOURCE_DATE_EPOCH)' '$(PKG_FILE_DEPENDS)'\n")
         for package in ['vlmcsd', 'luci-app-vlmcsd']:
             with self.subTest(package=package):
                 output = subprocess.check_output([
@@ -72,7 +72,9 @@ class BuildConfiguration(unittest.TestCase):
                            ('UPSTREAM_VERSION', '$(touch /tmp/should-not-run)'),
                            ('UPSTREAM_VERSION', 'version#comment'),
                            ('PACKAGE_RELEASE', True), ('SOURCE_DATE_EPOCH', -1),
-                           ('CONTAINER_BASE_IMAGE', 'ubuntu:latest')]:
+                           ('CONTAINER_BASE_IMAGE', 'ubuntu:latest'),
+                           ('OPENWRT_VERSION', '23.05.1/../../outside'),
+                           ('SDK_GCC_VERSION', '../toolchain')]:
             with self.subTest(key=key, value=value):
                 self.values = json.loads(config_module.CONFIG.read_text())
                 self.values[key] = value
@@ -119,6 +121,8 @@ class BuildConfiguration(unittest.TestCase):
     def test_assembly_ignores_stale_apks_after_a_config_upgrade(self):
         spec = importlib.util.spec_from_file_location('assemble', ROOT / 'scripts/assemble.py')
         assemble = importlib.util.module_from_spec(spec)
+        sys.path.insert(0, str(ROOT / 'scripts'))
+        self.addCleanup(sys.path.remove, str(ROOT / 'scripts'))
         with patch.dict(sys.modules, {'build_config': config_module}):
             spec.loader.exec_module(assemble)
         self.values.update(PACKAGE_RELEASE=7)

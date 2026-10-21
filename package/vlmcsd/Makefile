@@ -12,12 +12,15 @@ PKG_BUILD_DIR:=$(BUILD_DIR)/vlmcsd-$(PKG_SOURCE_VERSION)
 PKG_LICENSE:=LicenseRef-TheFlightSims-OSS AND Apache-2.0
 PKG_LICENSE_FILES:=LICENSE
 PKG_BUILD_PARALLEL:=1
+# Invoke the source Makefile once so daemon/client share the SDK jobserver.
+MAKE_PATH:=src
 PKG_ASLR_PIE_REGULAR:=1
-PKG_FILE_DEPENDS += $(TOPDIR)/vlmcsd-build.mk
+PKG_FILE_DEPENDS += $(TOPDIR)/vlmcsd-build.mk /work/scripts/inside-build.sh
 
 include $(INCLUDE_DIR)/package.mk
 
 define Package/vlmcsd
+  VERSION:=$(PACKAGE_VERSION)
   SECTION:=net
   CATEGORY:=Network
   TITLE:=Volume License Management Service
@@ -27,6 +30,7 @@ define Package/vlmcsd
 endef
 
 define Package/vlmcs
+  VERSION:=$(PACKAGE_VERSION)
   SECTION:=net
   CATEGORY:=Network
   TITLE:=vlmcsd protocol diagnostic client
@@ -40,10 +44,11 @@ endef
 MAKE_FLAGS += CC="$(TARGET_CC)" AR="$(TARGET_AR)" \
   CFLAGS="$(TARGET_CFLAGS) $(TARGET_CPPFLAGS)" LDFLAGS="$(TARGET_LDFLAGS)" \
   SAFE_MODE=1 THREADS=1 FEATURES=full CRYPTO=internal DNS_PARSER=internal NOLRESOLV=1 \
-  STRIP=0 MAX_THREADS=1 SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) \
+  STRIP=0 SOURCE_DATE_EPOCH=$(SOURCE_DATE_EPOCH) \
   VLMCSD_VERSION="$(VLMCSD_BUILD_VERSION)"
 
 define Build/Compile
+	$(INSTALL_DIR) $(PKG_BUILD_DIR)/bin $(PKG_BUILD_DIR)/build $(PKG_BUILD_DIR)/lib
 	$(call Build/Compile/Default,vlmcsd vlmcs)
 	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_CPPFLAGS) ./src/vlmcsd-timeout.c $(TARGET_LDFLAGS) -o $(PKG_BUILD_DIR)/bin/vlmcsd-timeout
 endef
@@ -57,7 +62,7 @@ define Package/vlmcsd/install
 	$(INSTALL_CONF) ./files/vlmcsd.config $(1)/etc/config/vlmcsd
 	$(INSTALL_DATA) $(PKG_BUILD_DIR)/LICENSE $(1)/usr/share/vlmcsd/LICENSE
 	$(INSTALL_DATA) ./files/LICENSE.integration $(1)/usr/share/vlmcsd/LICENSE.integration
-	printf '%s\n' '$(PKG_VERSION)-r$(PKG_RELEASE)' > $(1)/usr/share/vlmcsd/version
+	printf '%s\n' '$(PACKAGE_VERSION)' > $(1)/usr/share/vlmcsd/version
 	printf '%s\n' '$(PKG_SOURCE_VERSION)' > $(1)/usr/share/vlmcsd/source-commit
 endef
 

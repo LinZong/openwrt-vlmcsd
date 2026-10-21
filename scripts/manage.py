@@ -61,6 +61,8 @@ def scripts_hash():
 def load_release(path):
     path = Path(path).resolve()
     m = json.loads((path / 'release.json').read_text())
+    if m.get('package_format', 'apk') != 'apk':
+        raise ValueError('Transactional deployment requires APK/OpenWrt 25.12; install IPKs with native opkg as documented in README.md')
     for artifact in m['files']:
         p = path / artifact['file']
         if p.parent != path or not p.is_file() or digest(p.read_bytes()) != artifact['sha256']:

@@ -86,10 +86,18 @@ def main():
     check('changed target rejects reviewed plan', stale_plan)
     def dns():
         ssh('uci set vlmcsd.main.dns=1; uci commit vlmcsd; /etc/init.d/vlmcsd reload')
-        time.sleep(1)
         record = ssh('uci show dhcp.vlmcsd_srv')
         assert '_vlmcs._tcp.lan' in record
-        answer = ssh('nslookup -type=SRV _vlmcs._tcp.lan 127.0.0.1')
+        deadline = time.monotonic() + 10
+        answer = ''
+        while time.monotonic() < deadline:
+            try:
+                answer = ssh('nslookup -type=SRV _vlmcs._tcp.lan 127.0.0.1')
+                if '1688' in answer:
+                    break
+            except subprocess.CalledProcessError:
+                pass
+            time.sleep(.5)
         assert '1688' in answer, answer
         ssh('uci set vlmcsd.main.dns=0; uci commit vlmcsd; /etc/init.d/vlmcsd reload')
         assert not ssh('uci -q show dhcp.vlmcsd_srv || true').strip()

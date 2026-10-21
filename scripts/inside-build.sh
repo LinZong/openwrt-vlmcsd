@@ -7,8 +7,12 @@ BUILD_JOBS=$(python3 scripts/build_helpers.py jobs)
 export BUILD_JOBS
 printf 'Build parallelism: %s jobs\n' "$BUILD_JOBS"
 export TZ=UTC LC_ALL=C
-python3 scripts/build_config.py make > .cache/sdk/vlmcsd-build.mk
-cd /work/.cache/sdk
+python3 scripts/build_config.py make > "$SDK_PATH/vlmcsd-build.mk"
+cd "/work/$SDK_PATH"
+# Direct LuCI make bypasses SDK toplevel.mk; fakeroot still needs this path.
+export STAGING_DIR_HOST="$PWD/staging_dir/host"
+# The SDK fakeroot library must pair with SDK tar/stat, not newer host statx APIs.
+export PATH="$STAGING_DIR_HOST/bin:$PATH"
 mkdir -p dl
 cp "/work/$UPSTREAM_ARCHIVE_PATH" "dl/$UPSTREAM_SOURCE_FILE"
 # Package sources must always reflect the reviewed working tree.

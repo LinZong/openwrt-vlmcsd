@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assemble APK 3 packages, sign them, and produce a hashed offline release."""
+"""Assemble native APK/IPK packages and produce an authenticated release."""
 import hashlib
 import json
 import os
@@ -7,7 +7,8 @@ import shutil
 import subprocess
 import tarfile
 from pathlib import Path
-from build_config import load_config
+from build_config import load_config, STRING_KEYS, INTEGER_KEYS
+import ipk
 
 ROOT = Path(__file__).resolve().parent.parent
 SDK = ROOT / '.cache/sdk'
@@ -31,11 +32,17 @@ def metadata(path):
 
 def built_packages(config):
     candidates = {}
-    for path in SDK.glob('bin/packages/**/*.apk'):
-        info = metadata(path)
+    fmt = config['PACKAGE_FORMAT']
+    for path in SDK.glob('bin/packages/**/*.' + fmt):
+        info = metadata(path) if fmt == 'apk' else ipk.metadata(path)
         name = info['name']
-        arch = config['OPENWRT_ARCH'] if name in {'vlmcsd', 'vlmcs'} else 'noarch'
+        arch = config['OPENWRT_ARCH'] if name in {'vlmcsd', 'vlmcs'} else ('noarch' if fmt == 'apk' else 'all')
         if name in APP_NAMES and info['version'] == config['PACKAGE_VERSION'] and info['arch'] == arch:
+            if fmt == 'ipk':
+                for kind in ['control', 'data']:
+                    with ipk.archive(path, kind) as archive:
+                        if any(m.uid != 0 or m.gid != 0 for m in archive):
+                            raise RuntimeError('IPK contains host ownership; check SDK fakeroot: ' + str(path))
             candidates[name] = (path, info)
     missing = APP_NAMES - candidates.keys()
     if missing:
@@ -44,7 +51,11 @@ def built_packages(config):
 
 
 def main():
+    global SDK, APK, OUT
     config = load_config(require_upstream=True)
+    SDK = ROOT / config['SDK_PATH']
+    APK = SDK / 'staging_dir/host/bin/apk'
+    OUT = ROOT / (config['SDK_METADATA_PATH'] + '/release-stage')
     candidates = built_packages(config)
     if OUT.exists():
         shutil.rmtree(OUT)
@@ -60,37 +71,34 @@ def main():
         f, info = candidates[name]
         dest = OUT / f.name
         shutil.copy2(f, dest)
-        subprocess.check_call([str(APK), '--allow-untrusted', 'adbsign', '--sign-key', str(key), '--reset-signatures', str(dest)])
-        subprocess.check_call([str(APK), '--keys-dir', str(OUT), 'verify', str(dest)])
+        if config['PACKAGE_FORMAT'] == 'apk':
+            subprocess.check_call([str(APK), '--allow-untrusted', 'adbsign', '--sign-key', str(key), '--reset-signatures', str(dest)])
+            subprocess.check_call([str(APK), '--keys-dir', str(OUT), 'verify', str(dest)])
         packages.append({'name': name, 'version': info['version'], 'arch': info['arch'], 'depends': info.get('depends', []), 'file': f.name})
-    extraction = ROOT / '.cache/timeout-extract'
-    if extraction.exists():
+    if config['PACKAGE_FORMAT'] == 'apk':
+        extraction = OUT / 'timeout-extract'
+        extraction.mkdir()
+        subprocess.check_call([str(APK), '--allow-untrusted', 'extract', '--destination', str(extraction), str(candidates['vlmcsd'][0])])
+        shutil.copy2(extraction / 'usr/libexec/vlmcsd-timeout', OUT / 'recovery-timeout')
         shutil.rmtree(extraction)
-    extraction.mkdir(exist_ok=True)
-    f = candidates['vlmcsd'][0]
-    subprocess.check_call([str(APK), '--allow-untrusted', 'extract', '--destination', str(extraction), str(f)])
-    source = extraction / 'usr/libexec/vlmcsd-timeout'
-    if source.is_symlink():
-        source = extraction / str(source.readlink()).lstrip('/')
-    if not source.exists():
-        # OpenWrt alternatives may use /usr/libexec.
-        source = next(p for p in extraction.rglob('*timeout*') if p.is_file() and not p.is_symlink())
-    shutil.copy2(source, OUT / 'recovery-timeout')
+    else:
+        (OUT / 'recovery-timeout').write_bytes(ipk.payload_file(candidates['vlmcsd'][0], 'usr/libexec/vlmcsd-timeout'))
     (OUT / 'recovery-timeout').chmod(0o700)
     with tarfile.open(ROOT / config['UPSTREAM_ARCHIVE_PATH']) as source_archive:
         member = next(m for m in source_archive.getmembers() if m.name.endswith('/LICENSE') and m.name.count('/') == 1)
         (OUT / 'LICENSE.vlmcsd').write_bytes(source_archive.extractfile(member).read())
     shutil.copy2(ROOT / 'LICENSE', OUT / 'LICENSE.integration')
-    snapshot = json.loads((ROOT / 'config/build.json').read_text())
+    snapshot = {key: int(config[key]) if key in INTEGER_KEYS else config[key]
+                for key in STRING_KEYS | INTEGER_KEYS}
     snapshot.update(UPSTREAM_VERSION=config['UPSTREAM_VERSION'], UPSTREAM_SHA256=config['UPSTREAM_SHA256'],
                     SOURCE_DATE_EPOCH=int(config['SOURCE_DATE_EPOCH']))
     (OUT / 'build-config.json').write_text(json.dumps(snapshot, indent=2, sort_keys=True) + '\n')
     shutil.copy2(ROOT / '.cache/upstream.json', OUT / 'upstream.json')
-    if (ROOT / '.cache/builder-image.txt').exists():
-        shutil.copy2(ROOT / '.cache/builder-image.txt', OUT / 'builder-image.txt')
+    if (ROOT / config['SDK_METADATA_PATH'] / 'builder-image.txt').exists():
+        shutil.copy2(ROOT / config['SDK_METADATA_PATH'] / 'builder-image.txt', OUT / 'builder-image.txt')
     files = [{'file': p.name, 'sha256': hashlib.sha256(p.read_bytes()).hexdigest(), 'size': p.stat().st_size}
              for p in sorted(OUT.iterdir()) if p.is_file() and p.name not in {'release.json', 'SHA256SUMS'}]
-    manifest = {'schema': 1, 'openwrt': config['OPENWRT_VERSION'], 'arch': config['OPENWRT_ARCH'], 'source': config['UPSTREAM_URL'],
+    manifest = {'schema': 1, 'package_format': config['PACKAGE_FORMAT'], 'package_manager': config['PACKAGE_MANAGER'], 'openwrt': config['OPENWRT_VERSION'], 'arch': config['OPENWRT_ARCH'], 'source': config['UPSTREAM_URL'],
                 'commit': config['UPSTREAM_COMMIT'], 'source_date_epoch': int(config['SOURCE_DATE_EPOCH']),
                 'sdk_sha256': config['SDK_SHA256'], 'upstream_sha256': config['UPSTREAM_SHA256'],
                 'upstream_version': config['UPSTREAM_VERSION'], 'upstream_tree': config['UPSTREAM_TREE'],
@@ -98,14 +106,18 @@ def main():
                 'feeds': (SDK / 'feeds.conf.default').read_text(), 'packages': packages, 'files': files}
     (OUT / 'release.json').write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n')
     (OUT / 'SHA256SUMS').write_text(''.join(f'{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n' for p in sorted(OUT.iterdir()) if p.is_file() and p.name != 'SHA256SUMS'))
-    destination = ROOT / 'dist/release'
-    previous = ROOT / 'dist/release.previous'
+    if config['PACKAGE_FORMAT'] == 'ipk':
+        # Native opkg accepts the SDK-generated IPKs unchanged. Authenticate the bundle separately.
+        subprocess.check_call(['openssl', 'dgst', '-sha256', '-sign', str(key), '-out', str(OUT / 'SHA256SUMS.sig'), str(OUT / 'SHA256SUMS')])
+        subprocess.check_call(['openssl', 'dgst', '-sha256', '-verify', str(OUT / 'vlmcsd.pem'), '-signature', str(OUT / 'SHA256SUMS.sig'), str(OUT / 'SHA256SUMS')])
+    destination = ROOT / config['RELEASE_PATH']
+    previous = destination.with_name(destination.name + '.previous')
     if previous.exists():
         shutil.rmtree(previous)
     if destination.exists():
         destination.rename(previous)
     OUT.rename(destination)
-    print('Assembled', len(packages), 'signed packages in', destination)
+    print('Assembled', len(packages), config['PACKAGE_FORMAT'].upper(), 'packages in', destination)
 
 
 if __name__ == '__main__':

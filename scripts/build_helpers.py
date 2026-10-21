@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Runtime helpers for verified download reuse and build parallelism."""
 import argparse
+import hashlib
 import math
 import os
 import re
@@ -94,14 +95,26 @@ def prepare_sdk_metadata(config, cache):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['jobs', 'sdk-metadata'])
+    parser.add_argument('command', choices=['jobs', 'sdk-metadata', 'check-sha256'])
+    parser.add_argument('file', nargs='?', type=Path)
+    parser.add_argument('sha256', nargs='?')
     args = parser.parse_args()
     try:
         if args.command == 'jobs':
             print(build_jobs())
+        elif args.command == 'check-sha256':
+            if not args.file or not args.sha256:
+                raise ValueError('check-sha256 requires a file and expected hash')
+            digest = hashlib.sha256()
+            with args.file.open('rb') as source:
+                for block in iter(lambda: source.read(1024 * 1024), b''):
+                    digest.update(block)
+            if digest.hexdigest() != args.sha256.lower():
+                raise ValueError('SHA256 mismatch: ' + str(args.file))
         else:
             root = Path(__file__).resolve().parents[1]
-            prepare_sdk_metadata(load_config(), root / '.cache')
+            config = load_config()
+            prepare_sdk_metadata(config, root / config['SDK_METADATA_PATH'])
     except (OSError, ValueError, subprocess.CalledProcessError) as exc:
         parser.exit(1, f'Build preparation failed: {exc}\n')
 

@@ -13,3 +13,25 @@ jobs:
       - run: python3 -m unittest discover -s tests -v
       - run: node --check package/luci-app-vlmcsd/htdocs/luci-static/resources/view/vlmcsd/overview.js
       - run: shellcheck -S error scripts/*.sh package/vlmcsd/files/vlmcsd-helper package/vlmcsd/files/vlmcsd.init
+  build-matrix:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: ['23.05', '24.10', '25.12']
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+      - name: Build on Linux Docker Engine
+        env:
+          OPENWRT_PROFILE: ${{ matrix.profile }}
+          BUILD_JOBS: '2'
+        run: ./scripts/build.sh
+      - name: Verify signatures and ELF hardening
+        env:
+          OPENWRT_PROFILE: ${{ matrix.profile }}
+        run: |
+          eval "$(python3 scripts/build_config.py shell)"
+          docker run --rm --platform "$BUILDER_PLATFORM" --user "$(id -u):$(id -g)" \
+            -e HOME=/work/.cache/builder-home -e OPENWRT_PROFILE \
+            -v "$PWD:/work" "$BUILDER_IMAGE" bash scripts/verify-artifacts.sh

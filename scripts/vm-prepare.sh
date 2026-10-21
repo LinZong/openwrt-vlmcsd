@@ -3,7 +3,14 @@ set -eu
 cd /work
 [ -f .cache/vm_id ] || ssh-keygen -q -t ed25519 -N '' -f .cache/vm_id
 if [ ! -f .cache/vm-initialized ] || [ ! -f .cache/openwrt.img ]; then
-[ -f .cache/openwrt.img ] || gzip -dc .cache/openwrt.img.gz > .cache/openwrt.img
+if [ ! -f .cache/openwrt.img ]; then
+ rc=0
+ gzip -dc .cache/openwrt.img.gz > .cache/openwrt.img.part || rc=$?
+ # Some authenticated OpenWrt images append metadata after the gzip stream.
+ # GNU gzip returns 2 for that warning; a decompression error (1) remains fatal.
+ if [ "$rc" != 0 ] && [ "$rc" != 2 ]; then rm -f .cache/openwrt.img.part; exit "$rc"; fi
+ mv .cache/openwrt.img.part .cache/openwrt.img
+fi
 # The second partition starts at sector 33280 (verified with fdisk by vm setup).
 python3 - <<'PY'
 import struct

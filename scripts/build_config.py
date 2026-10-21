@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import os
 import re
 import shlex
 from datetime import datetime, timezone
@@ -43,9 +44,23 @@ def validate_upstream_lock(config, lock):
             'SOURCE_DATE_EPOCH': str(epoch), 'UPSTREAM_TREE': lock['tree']}
 
 
-def load_config(path=CONFIG, *, require_upstream=False):
+def load_config(path=CONFIG, *, require_upstream=False, profile=None):
     path = Path(path).resolve()
     config = json.loads(path.read_text())
+    profiles = config.pop('OPENWRT_PROFILES', {})
+    if not isinstance(profiles, dict):
+        raise ValueError('OPENWRT_PROFILES must be an object')
+    allowed = {'OPENWRT_VERSION', 'SDK_GCC_VERSION', 'SDK_SHA256',
+               'VM_IMAGE_SHA256', 'OPENWRT_KEY_FINGERPRINT'}
+    for name, overrides in profiles.items():
+        if not re.fullmatch(r'[0-9]+\.[0-9]+', name) or not isinstance(overrides, dict) or set(overrides) - allowed:
+            raise ValueError('Invalid OpenWrt profile: ' + name)
+    # Frozen release snapshots must not depend on the caller's profile.
+    selected = profile or os.environ.get('OPENWRT_PROFILE', '')
+    if path.name != 'build-config.json' and selected:
+        if selected not in profiles:
+            raise ValueError('Unknown OpenWrt profile: ' + selected)
+        config.update(profiles[selected])
     # Release snapshots retain generated fields, including older release snapshots.
     generated = {}
     if path.name == 'build-config.json' and GENERATED_KEYS <= config.keys():
@@ -70,13 +85,33 @@ def load_config(path=CONFIG, *, require_upstream=False):
         raise ValueError('OPENWRT_TARGET must be target/subtarget')
     if not re.fullmatch(r'[^@]+@sha256:[a-f0-9]{64}', config['CONTAINER_BASE_IMAGE']):
         raise ValueError('CONTAINER_BASE_IMAGE must pin a SHA-256 digest')
+    for key in ['OPENWRT_VERSION', 'SDK_GCC_VERSION']:
+        if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', config[key]):
+            raise ValueError(key + ' must be a three-part release number')
+    if config['SDK_LIBC'] != 'musl' or config['OPENWRT_DEVICE'] != 'generic':
+        raise ValueError('Only the generic x86_64 musl target is currently supported')
     c = {key: str(value) for key, value in config.items()}
     for key in ['SDK_SHA256', 'VM_IMAGE_SHA256', 'UPSTREAM_COMMIT']:
         c[key] = c[key].lower()
     c['OPENWRT_KEY_FINGERPRINT'] = c['OPENWRT_KEY_FINGERPRINT'].upper()
     target = c['OPENWRT_TARGET'].replace('/', '-')
     c['SDK_URL'] = f"https://downloads.openwrt.org/releases/{c['OPENWRT_VERSION']}/targets/{c['OPENWRT_TARGET']}"
-    c['SDK_FILE'] = f"openwrt-sdk-{c['OPENWRT_VERSION']}-{target}_gcc-{c['SDK_GCC_VERSION']}_{c['SDK_LIBC']}.Linux-x86_64.tar.zst"
+    series = '.'.join(c['OPENWRT_VERSION'].split('.')[:2])
+    if selected and path.name != 'build-config.json' and series != selected:
+        raise ValueError('Profile name does not match its OpenWrt release series')
+    if series not in {'23.05', '24.10', '25.12'}:
+        raise ValueError('Supported OpenWrt series: 23.05, 24.10, 25.12')
+    if c['OPENWRT_TARGET'] != 'x86/64' or c['OPENWRT_ARCH'] != 'x86_64':
+        raise ValueError('Only x86/64 (x86_64) is currently supported')
+    c['PACKAGE_FORMAT'] = 'apk' if series == '25.12' else 'ipk'
+    c['PACKAGE_MANAGER'] = 'apk' if series == '25.12' else 'opkg'
+    c['SDK_COMPRESSION'] = 'xz' if series == '23.05' else 'zst'
+    suffix = c['OPENWRT_VERSION'] + '-' + c['OPENWRT_ARCH']
+    c['SDK_PATH'] = '.cache/sdk' if c['PACKAGE_FORMAT'] == 'apk' else '.cache/sdk-' + suffix
+    c['SDK_METADATA_PATH'] = '.cache' if c['PACKAGE_FORMAT'] == 'apk' else '.cache/sdk-cache/' + suffix
+    c['SDK_ARCHIVE_PATH'] = c['SDK_METADATA_PATH'] + '/sdk.tar.' + c['SDK_COMPRESSION']
+    c['RELEASE_PATH'] = 'dist/release' if c['PACKAGE_FORMAT'] == 'apk' else 'dist/release-' + suffix
+    c['SDK_FILE'] = f"openwrt-sdk-{c['OPENWRT_VERSION']}-{target}_gcc-{c['SDK_GCC_VERSION']}_{c['SDK_LIBC']}.Linux-x86_64.tar.{c['SDK_COMPRESSION']}"
     c['OPENWRT_KEY_URL'] = f"https://raw.githubusercontent.com/openwrt/keyring/master/gpg/0x{c['OPENWRT_KEY_FINGERPRINT'][-16:]}.asc"
     c['UPSTREAM_URL'] = f"https://github.com/{c['UPSTREAM_REPOSITORY']}"
     c['UPSTREAM_GIT_URL'] = c['UPSTREAM_URL'] + '.git'
@@ -109,7 +144,7 @@ def load_config(path=CONFIG, *, require_upstream=False):
             if require_upstream:
                 raise ValueError('Upstream metadata is missing or stale; run ./scripts/build.sh first') from None
     if 'UPSTREAM_VERSION' in c:
-        c['PACKAGE_VERSION'] = f"{c['UPSTREAM_VERSION']}-r{c['PACKAGE_RELEASE']}"
+        c['PACKAGE_VERSION'] = f"{c['UPSTREAM_VERSION']}-{'r' if c['PACKAGE_FORMAT'] == 'apk' else ''}{c['PACKAGE_RELEASE']}"
         c['VLMCSD_BUILD_VERSION'] = f"{c['UPSTREAM_VERSION']}-openwrt-r{c['PACKAGE_RELEASE']}-{c['UPSTREAM_COMMIT'][:7]}"
     return c
 
@@ -134,12 +169,13 @@ def verify_sdk_checksums(config, path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('format', choices=['shell', 'make', 'json'])
+    parser.add_argument('--profile', help='OpenWrt series from OPENWRT_PROFILES (or OPENWRT_PROFILE)')
     parser.add_argument('--config', type=Path, default=CONFIG)
     parser.add_argument('--sdk-checksums', type=Path, help='Require the configured SDK in this signed checksum list')
     parser.add_argument('--require-upstream', action='store_true', help='Require generated upstream metadata')
     args = parser.parse_args()
     try:
-        config = load_config(args.config, require_upstream=args.require_upstream or args.format == 'make')
+        config = load_config(args.config, profile=args.profile, require_upstream=args.require_upstream or args.format == 'make')
         if args.sdk_checksums:
             verify_sdk_checksums(config, args.sdk_checksums)
         print(render(config, args.format), end='')
