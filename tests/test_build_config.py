@@ -20,22 +20,28 @@ class BuildConfiguration(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        self.path = self.root / 'build.json'
+        (self.root / 'config').mkdir()
+        self.path = self.root / 'config/build.json'
         self.values = json.loads(config_module.CONFIG.read_text())
 
-    def write(self):
+    def write(self, *, resolved=True):
         self.path.write_text(json.dumps(self.values))
+        if resolved:
+            (self.root / '.cache').mkdir(exist_ok=True)
+            commit = self.values['UPSTREAM_COMMIT'].lower()
+            lock = {'schema': 1, 'repository': self.values['UPSTREAM_REPOSITORY'], 'commit': commit,
+                    'tree': 'c' * 40, 'source_date_epoch': 1704067200,
+                    'version': config_module.upstream_version(commit, 1704067200), 'archive_sha256': 'b' * 64}
+            (self.root / '.cache/upstream.json').write_text(json.dumps(lock))
         return config_module.load_config(self.path)
 
     def test_upgrade_propagates_to_shell_and_both_package_makefiles(self):
-        self.values.update(OPENWRT_VERSION='99.1.2', UPSTREAM_VERSION='9999',
-                           UPSTREAM_COMMIT='a' * 40, UPSTREAM_SHA256='b' * 64,
-                           PACKAGE_RELEASE=7, SOURCE_DATE_EPOCH=1800000000)
+        self.values.update(OPENWRT_VERSION='99.1.2', UPSTREAM_COMMIT='a' * 40, PACKAGE_RELEASE=7)
         config = self.write()
         result = subprocess.check_output(
             ['bash', '-eu', '-c', config_module.render(config, 'shell') +
              'printf "%s\\n" "$PACKAGE_VERSION" "$VLMCSD_BUILD_VERSION" "$SDK_FILE" "$VM_URL"'], text=True)
-        self.assertEqual(result.splitlines()[:2], ['9999-r7', '9999-openwrt-r7-aaaaaaa'])
+        self.assertEqual(result.splitlines()[:2], ['20240101~aaaaaaaaaaaa-r7', '20240101~aaaaaaaaaaaa-openwrt-r7-aaaaaaa'])
         self.assertIn('openwrt-sdk-99.1.2-', result)
         self.assertIn('/releases/99.1.2/targets/', result)
         if not shutil.which('make'):
@@ -52,14 +58,14 @@ class BuildConfiguration(unittest.TestCase):
                 output = subprocess.check_output([
                     'make', '--no-print-directory', '-f', str(ROOT / 'package' / package / 'Makefile'),
                     '-f', str(probe), f'TOPDIR={self.root}', f'INCLUDE_DIR={self.root / "include"}', 'probe'], text=True).splitlines()
-                self.assertEqual(output[0], '9999-r7')
-                self.assertEqual(output[5], '1800000000')
+                self.assertEqual(output[0], '20240101~aaaaaaaaaaaa-r7')
+                self.assertEqual(output[5], '1704067200')
                 self.assertIn(str(self.root / 'vlmcsd-build.mk'), output[6])
                 if package == 'vlmcsd':
                     self.assertEqual(output[1:3], ['a' * 40, 'b' * 64])
-                    self.assertIn('9999-openwrt-r7-aaaaaaa', output[3])
+                    self.assertIn('20240101~aaaaaaaaaaaa-openwrt-r7-aaaaaaa', output[3])
                 else:
-                    self.assertEqual(output[4], '9999-r7')
+                    self.assertEqual(output[4], '20240101~aaaaaaaaaaaa-r7')
 
     def test_rejects_bad_hashes_and_shell_or_make_expressions(self):
         for key, value in [('SDK_SHA256', 'abc'), ('UPSTREAM_COMMIT', 'z' * 40),
@@ -74,8 +80,8 @@ class BuildConfiguration(unittest.TestCase):
                     self.write()
 
     def test_hexadecimal_case_does_not_change_downloads_or_key_lookup(self):
-        expected = config_module.load_config()
-        for key in ['SDK_SHA256', 'UPSTREAM_SHA256', 'VM_IMAGE_SHA256',
+        expected = self.write()
+        for key in ['SDK_SHA256', 'VM_IMAGE_SHA256',
                     'UPSTREAM_COMMIT', 'OPENWRT_KEY_FINGERPRINT']:
             self.values[key] = self.values[key].swapcase()
         self.assertEqual(self.write(), expected)
@@ -96,7 +102,7 @@ class BuildConfiguration(unittest.TestCase):
             self.assertEqual(result.stdout, b'')
 
     def test_vm_rejects_a_cached_guest_from_a_different_image(self):
-        (self.root / 'config').mkdir()
+        (self.root / 'config').mkdir(exist_ok=True)
         (self.root / 'scripts').mkdir()
         (self.root / '.cache').mkdir()
         shutil.copy2(config_module.CONFIG, self.root / 'config/build.json')
@@ -115,7 +121,7 @@ class BuildConfiguration(unittest.TestCase):
         assemble = importlib.util.module_from_spec(spec)
         with patch.dict(sys.modules, {'build_config': config_module}):
             spec.loader.exec_module(assemble)
-        self.values.update(UPSTREAM_VERSION='9999', PACKAGE_RELEASE=7)
+        self.values.update(PACKAGE_RELEASE=7)
         config = self.write()
         packages = self.root / 'bin/packages/test/base'
         packages.mkdir(parents=True)
@@ -129,10 +135,33 @@ class BuildConfiguration(unittest.TestCase):
         with patch.object(assemble, 'SDK', self.root), patch.object(assemble, 'metadata', side_effect=entries.__getitem__):
             selected = assemble.built_packages(config)
             self.assertEqual(set(selected), assemble.APP_NAMES)
-            self.assertTrue(all(info['version'] == '9999-r7' for _, info in selected.values()))
-            (packages / 'vlmcsd-9999-r7.apk').unlink()
+            self.assertTrue(all(info['version'] == config['PACKAGE_VERSION'] for _, info in selected.values()))
+            (packages / f"vlmcsd-{config['PACKAGE_VERSION']}.apk").unlink()
             with self.assertRaisesRegex(RuntimeError, 'Missing built packages'):
                 assemble.built_packages(config)
+
+    def test_missing_or_stale_lock_cannot_be_used_for_a_build(self):
+        base = self.write(resolved=False)
+        self.assertNotIn('UPSTREAM_VERSION', base)
+        with self.assertRaisesRegex(ValueError, 'missing or stale'):
+            config_module.load_config(self.path, require_upstream=True)
+        self.write()
+        self.values['UPSTREAM_COMMIT'] = 'd' * 40
+        self.path.write_text(json.dumps(self.values))
+        with self.assertRaisesRegex(ValueError, 'missing or stale'):
+            config_module.load_config(self.path, require_upstream=True)
+
+    def test_release_snapshot_does_not_follow_current_build_configuration(self):
+        generated = self.write()
+        frozen = {**self.values, 'UPSTREAM_VERSION': generated['UPSTREAM_VERSION'],
+                  'UPSTREAM_SHA256': generated['UPSTREAM_SHA256'], 'SOURCE_DATE_EPOCH': 1704067200}
+        snapshot = self.root / 'build-config.json'
+        snapshot.write_text(json.dumps(frozen))
+        self.values['UPSTREAM_COMMIT'] = 'd' * 40
+        self.write()
+        loaded = config_module.load_config(snapshot, require_upstream=True)
+        self.assertEqual(loaded['PACKAGE_VERSION'], generated['PACKAGE_VERSION'])
+        self.assertEqual(loaded['UPSTREAM_COMMIT'], generated['UPSTREAM_COMMIT'])
 
 
 if __name__ == '__main__':

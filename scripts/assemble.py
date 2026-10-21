@@ -44,7 +44,7 @@ def built_packages(config):
 
 
 def main():
-    config = load_config()
+    config = load_config(require_upstream=True)
     candidates = built_packages(config)
     if OUT.exists():
         shutil.rmtree(OUT)
@@ -77,11 +77,15 @@ def main():
         source = next(p for p in extraction.rglob('*timeout*') if p.is_file() and not p.is_symlink())
     shutil.copy2(source, OUT / 'recovery-timeout')
     (OUT / 'recovery-timeout').chmod(0o700)
-    with tarfile.open(ROOT / '.cache/upstream.tar.gz') as source_archive:
+    with tarfile.open(ROOT / config['UPSTREAM_ARCHIVE_PATH']) as source_archive:
         member = next(m for m in source_archive.getmembers() if m.name.endswith('/LICENSE') and m.name.count('/') == 1)
         (OUT / 'LICENSE.vlmcsd').write_bytes(source_archive.extractfile(member).read())
     shutil.copy2(ROOT / 'LICENSE', OUT / 'LICENSE.integration')
-    shutil.copy2(ROOT / 'config/build.json', OUT / 'build-config.json')
+    snapshot = json.loads((ROOT / 'config/build.json').read_text())
+    snapshot.update(UPSTREAM_VERSION=config['UPSTREAM_VERSION'], UPSTREAM_SHA256=config['UPSTREAM_SHA256'],
+                    SOURCE_DATE_EPOCH=int(config['SOURCE_DATE_EPOCH']))
+    (OUT / 'build-config.json').write_text(json.dumps(snapshot, indent=2, sort_keys=True) + '\n')
+    shutil.copy2(ROOT / '.cache/upstream.json', OUT / 'upstream.json')
     if (ROOT / '.cache/builder-image.txt').exists():
         shutil.copy2(ROOT / '.cache/builder-image.txt', OUT / 'builder-image.txt')
     files = [{'file': p.name, 'sha256': hashlib.sha256(p.read_bytes()).hexdigest(), 'size': p.stat().st_size}
@@ -89,6 +93,7 @@ def main():
     manifest = {'schema': 1, 'openwrt': config['OPENWRT_VERSION'], 'arch': config['OPENWRT_ARCH'], 'source': config['UPSTREAM_URL'],
                 'commit': config['UPSTREAM_COMMIT'], 'source_date_epoch': int(config['SOURCE_DATE_EPOCH']),
                 'sdk_sha256': config['SDK_SHA256'], 'upstream_sha256': config['UPSTREAM_SHA256'],
+                'upstream_version': config['UPSTREAM_VERSION'], 'upstream_tree': config['UPSTREAM_TREE'],
                 'container_base_image': config['CONTAINER_BASE_IMAGE'],
                 'feeds': (SDK / 'feeds.conf.default').read_text(), 'packages': packages, 'files': files}
     (OUT / 'release.json').write_text(json.dumps(manifest, indent=2, sort_keys=True) + '\n')

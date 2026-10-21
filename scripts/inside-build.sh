@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 cd /work
-build_env=$(python3 scripts/build_config.py shell)
+build_env=$(python3 scripts/build_config.py shell --require-upstream)
 eval "$build_env"
 BUILD_JOBS=$(python3 scripts/build_helpers.py jobs)
 export BUILD_JOBS
@@ -9,6 +9,8 @@ printf 'Build parallelism: %s jobs\n' "$BUILD_JOBS"
 export TZ=UTC LC_ALL=C
 python3 scripts/build_config.py make > .cache/sdk/vlmcsd-build.mk
 cd /work/.cache/sdk
+mkdir -p dl
+cp "/work/$UPSTREAM_ARCHIVE_PATH" "dl/$UPSTREAM_SOURCE_FILE"
 # Package sources must always reflect the reviewed working tree.
 rm -rf package/vlmcsd package/luci-app-vlmcsd
 cp -R /work/package/vlmcsd /work/package/luci-app-vlmcsd package/

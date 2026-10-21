@@ -9,7 +9,7 @@ from build_helpers import build_jobs
 
 root = Path(__file__).resolve().parent.parent
 sdk = root / '.cache/sdk'
-config = load_config()
+config = load_config(require_upstream=True)
 jobs = build_jobs()
 
 

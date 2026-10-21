@@ -19,11 +19,11 @@ download_checked() {
  mv "$destination.part" "$destination"
 }
 download_checked "$SDK_URL/$SDK_FILE" .cache/sdk.tar.zst "$SDK_SHA256"
-download_checked "$UPSTREAM_ARCHIVE_URL" .cache/upstream.tar.gz "$UPSTREAM_SHA256"
 docker build --platform "$BUILDER_PLATFORM" --build-arg "BASE_IMAGE=$CONTAINER_BASE_IMAGE" -t "$BUILDER_IMAGE" -f scripts/Dockerfile . > .cache/container-build.log 2>&1
 docker run --rm --platform "$BUILDER_PLATFORM" -v "$PWD:/work" "$BUILDER_IMAGE" bash -ec '
  build_env=$(python3 scripts/build_config.py shell)
  eval "$build_env"
+ python3 scripts/upstream.py
  python3 scripts/build_helpers.py sdk-metadata
  python3 scripts/build_config.py json --sdk-checksums .cache/sha256sums > .cache/build-config.json
  if [ "$(cat .cache/sdk/.sdk-sha256 2>/dev/null || true)" != "$SDK_SHA256" ]; then

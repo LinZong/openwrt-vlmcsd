@@ -10,13 +10,13 @@
 ./scripts/build.sh
 ```
 
-SDK 和源码压缩包先校验本地 SHA256；官方校验清单、签名和发布公钥先在本地验证签名、指纹及 SDK 条目。验证通过的文件直接复用，缺失、损坏或与配置不匹配时才补充下载。下载失败或验证失败不会覆盖已有文件。Docker 基础依赖继续复用镜像构建缓存，SDK 内部依赖复用其下载缓存。
+SDK 压缩包先校验本地 SHA256；官方校验清单、签名和发布公钥先在本地验证签名、指纹及 SDK 条目。上游源码按完整提交 SHA 获取 Git 对象并校验，自动生成源码归档和校验值。完整缓存直接复用，归档损坏时从本地 Git 对象重新生成，缺少 Git 对象时才联网获取。下载失败或验证失败不会覆盖已有有效材料。Docker 基础依赖继续复用镜像构建缓存，SDK 内部依赖复用其下载缓存。
 
 编译默认使用构建容器可用的 CPU 核数，并考虑 cgroup v2 CPU 配额。可以手动限制并行任务数，例如 `BUILD_JOBS=4 ./scripts/build.sh`；设为 `1` 则串行编译。实际并行度记录在 `.cache/build.log` 开头。`BUILD_JOBS` 是本次运行参数，不写入固定版本配置，也不改变发布版本。
 
 脚本验证官方 SDK 的签名、签名密钥指纹和固定 SHA256，使用 SDK 自带的固定 feeds，构建并签名 APK。第一次准备 SDK 较慢；路由器不参与编译。私钥保存于 `.secrets/`，请备份且勿提交。构建日志位于 `.cache/build.log`。
 
-产物在 `dist/release/`：服务包、客户端、LuCI、中文翻译、离线依赖、公钥、恢复用 timeout、许可证、`release.json` 和 `SHA256SUMS`。`release.json` 记录上游提交、SDK 哈希、feeds、包版本和依赖。相同源码和 SDK 下，时间来自固定 `SOURCE_DATE_EPOCH`，签名后的文件单独校验。
+产物在 `dist/release/`：服务包、客户端、LuCI、中文翻译、离线依赖、公钥、恢复用 timeout、许可证、`release.json`、`upstream.json` 和 `SHA256SUMS`。`release.json` 记录上游提交、SDK 哈希、feeds、包版本和依赖。构建时间 `SOURCE_DATE_EPOCH` 自动取自固定 Git 提交的提交者时间，签名后的文件单独校验。
 
 ## 升级构建依赖
 
@@ -26,16 +26,20 @@ SDK 和源码压缩包先校验本地 SHA256；官方校验清单、签名和发
 | --- | --- |
 | `OPENWRT_VERSION`、`SDK_GCC_VERSION`、`SDK_SHA256` | 固定 SDK 发行版、工具链和压缩包校验值；下载地址和文件名自动生成。 |
 | `OPENWRT_KEY_FINGERPRINT` | 校验 OpenWrt 发布公钥，公钥下载地址由完整指纹派生。 |
-| `UPSTREAM_REPOSITORY`、`UPSTREAM_VERSION`、`UPSTREAM_COMMIT`、`UPSTREAM_SHA256` | 固定上游仓库、版本、提交和该提交的压缩包内容。 |
-| `SOURCE_DATE_EPOCH`、`PACKAGE_RELEASE` | 固定构建时间和 OpenWrt 包修订号；包版本和程序版本字符串自动生成。 |
+| `UPSTREAM_REPOSITORY`、`UPSTREAM_COMMIT` | 上游只需填写 GitHub 的 `owner/repository` 和完整 40 位提交 SHA。 |
+| `PACKAGE_RELEASE` | 本项目的 OpenWrt 包修订号；与上游版本无关，默认保持现有值。 |
 | `CONTAINER_BASE_IMAGE`、`BUILDER_PLATFORM` | 固定容器基础镜像摘要和构建平台。 |
 | `VM_IMAGE_SHA256` | 校验与 OpenWrt 版本对应的测试 VM 镜像。 |
 
 `scripts/build_config.py` 使用 Python 标准库读取和校验配置，向 Shell、Python 和 Make 提供相同的派生值；可用 `python3 scripts/build_config.py json` 查看。构建时自动生成 SDK 内的 `vlmcsd-build.mk`，供两个包的 Makefile 使用，不要手动修改生成文件。Dockerfile 的 `BASE_IMAGE` 参数也由脚本从配置传入。
 
-SDK 或源码校验值变化时会重新下载对应压缩包；SDK 哈希变化时重新解压并准备 SDK。首次从旧缓存迁移会重新准备 SDK。测试 VM 镜像或初始化脚本变化时，`vm.sh start` 会提示先执行 `vm.sh reset`，避免继续使用旧测试系统。配置包含目标架构字段，但切换到其他架构仍需适配 QEMU、内核目标和 ELF 校验，不能仅修改配置就假定支持。
+`UPSTREAM_VERSION`、`UPSTREAM_SHA256`、`SOURCE_DATE_EPOCH` 不再手填。构建时，`scripts/upstream.py` 获取并核对固定 Git 提交，执行对象完整性检查，再用 `git archive` 和固定 gzip 头生成源码包。版本格式为 `YYYYMMDD~<提交前12位SHA>`，日期使用该提交的 UTC 时间；APK 版本再附加 `-r<PACKAGE_RELEASE>`，不依赖标签、分支最新状态或当前系统时间。
 
-每个发布目录附带本次 `build-config.json` 快照，部署时按照该发布的 `release.json` 校验目标系统，因此后续修改构建配置不会改变旧发布要求。`docs/review.md`、`docs/validation.md` 中的版本和产物哈希是历史验收记录，不随配置改写。
+自动生成结果保存在 `.cache/upstream.json`，包括仓库、提交、源码树、版本、构建时间、归档 SHA256 和子模块引用；Git 对象与归档分别缓存在 `.cache/upstream-git/` 和 `.cache/upstream-sources/`。改变仓库或提交后会自动重新解析。归档遵循 `git archive` 的范围，不递归拉取子模块；当前上游仅有不参与 C 源码编译的 wiki 子模块，与原 GitHub 源码包的范围一致。
+
+SDK 哈希变化时重新下载、解压并准备 SDK。首次从旧缓存迁移会重新准备 SDK。测试 VM 镜像或初始化脚本变化时，`vm.sh start` 会提示先执行 `vm.sh reset`，避免继续使用旧测试系统。配置包含目标架构字段，但切换到其他架构仍需适配 QEMU、内核目标和 ELF 校验，不能仅修改配置就假定支持。
+
+每个发布目录附带本次 `build-config.json` 快照和 `upstream.json` 自动生成记录。快照包含已解析的版本、时间和哈希，后续修改配置或清理缓存不会改变旧发布的校验要求。部署时按照该发布的 `release.json` 校验目标系统。`docs/review.md`、`docs/validation.md` 中的版本和产物哈希是历史验收记录，不随配置改写。
 
 ## 审查后部署
 

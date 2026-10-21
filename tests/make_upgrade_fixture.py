@@ -52,7 +52,7 @@ for package in manifest['packages']:
     subprocess.check_call([str(apk), '--allow-untrusted', 'adbsign', '--reset-signatures', '--sign-key', str(root / '.secrets/vlmcsd.key'), str(dest)])
     subprocess.check_call([str(apk), '--keys-dir', str(source), 'verify', str(dest)])
     packages.append({**package, 'version': old_version, 'file': dest.name})
-for name in ['recovery-timeout', 'vlmcsd.pem', 'LICENSE.vlmcsd', 'LICENSE.integration', 'build-config.json']:
+for name in ['recovery-timeout', 'vlmcsd.pem', 'LICENSE.vlmcsd', 'LICENSE.integration', 'build-config.json', 'upstream.json']:
     shutil.copy2(source / name, out / name)
 manifest['packages'] = packages
 manifest['files'] = [{'file': p.name, 'sha256': hashlib.sha256(p.read_bytes()).hexdigest(), 'size': p.stat().st_size} for p in sorted(out.iterdir())]
